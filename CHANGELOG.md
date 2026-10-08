@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [1.2.0] - 2026-10-08
+
+### Cambiado
+- `imagen.yml`: por defecto construye `linux/amd64,linux/arm64` (imágenes multi-arquitectura) y agrega QEMU cuando hay arm64. Motivo: los servidores de Solbeet y de los clientes pueden ser ARM o x86 (el entorno de prueba usa uno de cada uno). Para volver a una sola arquitectura, pasar `plataformas: linux/amd64`.
+
 ## [Sin publicar]
 
 ## [1.1.0] - 2026-10-08
