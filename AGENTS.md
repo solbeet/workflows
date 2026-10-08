@@ -77,3 +77,5 @@ No hay build ni paquete: "publicar" es crear tags (ver `docs/desarrollo.md#publi
 - actionlint solo corre shellcheck sobre los `run:` si `shellcheck` está en el PATH; en el runner de GitHub está.
 - La concurrencia de los reutilizables usa prefijos propios (`python-react-…`) para no chocar con el grupo del workflow que llama (si coinciden, se bloquean entre sí).
 - Al mover el tag mayor, apuntarlo al commit (`"v1.1.0^{}"`), no al tag anotado: si no, git crea un tag anidado.
+
+- `node --test <carpeta>` falla en Node 22 (toma la carpeta como módulo): usar un glob `"test/**/*.test.js"`.

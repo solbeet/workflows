@@ -7,7 +7,7 @@
   "scripts": {
     "lint": "node scripts/lint.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/",
+    "test": "node --test \"test/**/*.test.js\"",
     "build": "tsc --project tsconfig.build.json"
   },
   "devDependencies": {
