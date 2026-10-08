@@ -1,6 +1,6 @@
 # Estado
 
-Última actualización: 2026-10-08 · Versión: v1.0.2 (sin publicar en GitHub)
+Última actualización: 2026-10-08 · Versión: v1.1.0 en la rama `integracion/opcion-b` (tag local `v1.1.0`, sin push; publicado hasta v1.0.3)
 
 ## Qué funciona y cómo se verificó
 
@@ -9,6 +9,7 @@ Todo verificado localmente en macOS arm64, con los comandos de `docs/desarrollo.
 | Qué | Comando | Resultado |
 |---|---|---|
 | Lint de los 4 workflows y los 3 ejemplos (con shellcheck en el PATH) | `scripts/lint-workflows.sh` | actionlint 1.7.12 sin hallazgos |
+| `imagen.yml` y `examples/imagenes.yml` (v1.1.0) | `scripts/lint-workflows.sh` | actionlint 1.7.12 sin hallazgos. No corrió en Actions: falta el primer tag de un servicio para ver la imagen en ghcr.io |
 | Los 8 archivos YAML parsean | `yaml.safe_load` sobre `.github/**/*.yml` y `examples/*.yml` | OK |
 | Lógica de `pr-hygiene` (job `hygiene`) | `uv run --no-project --with pyyaml==6.0.2 python tests/hygiene/test_pr_hygiene.py` | 12/12 casos con el resultado esperado, incluidos los que deben fallar (sección faltante o vacía, `.rej`, marcadores de conflicto) y el aviso por diff grande excluyendo lockfiles |
 | Comandos del job `backend` sobre el fixture | `uv sync --frozen`, `ruff check`, `ruff format --check`, `pyright`, `pytest` | todo en verde; pytest: 3 passed, 1 skipped (el de Postgres, sin `DATABASE_URL`) |
@@ -43,7 +44,8 @@ Todo verificado localmente en macOS arm64, con los comandos de `docs/desarrollo.
 
 ## Pendientes (en orden)
 
-1. Crear el repo público `solbeet/workflows` (org `solbeet`), hacer push de `main` y de los tags `v1.0.0`, `v1.0.1`, `v1.0.2` y `v1`, y confirmar que `selftest` pasa en verde en GitHub. Corregir lo que aparezca y publicar `v1.0.3` si hace falta.
+0. Mergear `integracion/opcion-b`, etiquetar `v1.1.0`, mover `v1` y ver la primera imagen publicada por `imagen.yml` desde un tag de `solbeet-plataforma`.
+1. (Hecho: repo publicado hasta v1.0.3.) Crear el repo público `solbeet/workflows` (org `solbeet`), hacer push de `main` y de los tags `v1.0.0`, `v1.0.1`, `v1.0.2` y `v1`, y confirmar que `selftest` pasa en verde en GitHub. Corregir lo que aparezca y publicar `v1.0.3` si hace falta.
 2. Probar `claude-review.yml` desde un repo de prueba con un secreto real; ajustar el prompt según los primeros resultados.
 3. Ejecutar en GitHub los tres callers desde un proyecto generado con `solbeet-template` (ya los genera, lintados) y configurar la protección de rama con los checks del README.
 4. Evaluar un input `runs-on` para runners propios y si conviene exigir que las casillas de `## Evidencia` estén marcadas.

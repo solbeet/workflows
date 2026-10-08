@@ -1,0 +1,30 @@
+# Publica las imágenes del servicio en ghcr.io al pushear un tag vX.Y.Z.
+# Copiar a .github/workflows/imagenes.yml y dejar un job por imagen
+# (nombres según `deploy/contract.yaml` del repo).
+name: imagenes
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    uses: solbeet/workflows/.github/workflows/imagen.yml@v1
+    permissions:
+      contents: read
+      packages: write
+    with:
+      imagen: <repo>-api
+      contexto: backend
+  web:
+    uses: solbeet/workflows/.github/workflows/imagen.yml@v1
+    permissions:
+      contents: read
+      packages: write
+    with:
+      imagen: <repo>-web
+      contexto: frontend
