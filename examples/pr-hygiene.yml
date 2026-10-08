@@ -1,0 +1,20 @@
+# Ejemplo para un repo cliente: copiar a .github/workflows/pr-hygiene.yml.
+# Checks resultantes: "pr-hygiene / hygiene" y "pr-hygiene / secret-scan".
+name: pr-hygiene
+
+on:
+  pull_request:
+    # "edited" vuelve a correr el control cuando se corrige el cuerpo del PR.
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-hygiene:
+    uses: solbeet-factory/workflows/.github/workflows/pr-hygiene.yml@v1
+    with:
+      max-diff-lines: 400
+      required-sections: |
+        ## Qué cambia y por qué
+        ## Evidencia

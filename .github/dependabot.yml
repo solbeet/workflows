@@ -1,0 +1,17 @@
+# Dependabot propone PRs cuando salen versiones nuevas de las actions fijadas
+# por SHA. Las versiones de gitleaks y actionlint (binarios descargados) no las
+# ve Dependabot: se actualizan a mano (ver docs/desarrollo.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: uv
+    directory: /tests/fixture/backend
+    schedule:
+      interval: monthly
+  - package-ecosystem: npm
+    directory: /tests/fixture/frontend
+    schedule:
+      interval: monthly

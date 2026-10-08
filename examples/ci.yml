@@ -1,0 +1,19 @@
+# Ejemplo para un repo cliente: copiar a .github/workflows/ci.yml.
+# Checks resultantes: "ci / backend" y "ci / frontend" (ver README, "Checks requeridos").
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: solbeet-factory/workflows/.github/workflows/python-react.yml@v1
+    with:
+      backend-dir: backend
+      frontend-dir: frontend
+      # postgres: true   # descomentar si los tests necesitan base de datos (exporta DATABASE_URL)

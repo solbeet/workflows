@@ -1,0 +1,91 @@
+# Autoverificación del repo: lintea los workflows y llama a los reutilizables
+# con ruta local (./.github/workflows/...) contra el fixture de tests/fixture/.
+# Así cada PR prueba la versión de los workflows que trae el propio PR.
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selftest-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Versión fijada de actionlint y checksum SHA-256 del release
+  # (actionlint_1.7.12_checksums.txt). Ver docs/decisiones/0003-escaner-de-secretos-y-versiones-fijadas.md.
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256_LINUX_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Instalar actionlint (versión fijada, checksum verificado)
+        run: |
+          dir="$RUNNER_TEMP/actionlint"
+          mkdir -p "$dir"
+          file="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$dir/$file" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${file}"
+          echo "${ACTIONLINT_SHA256_LINUX_AMD64}  $dir/$file" | sha256sum -c -
+          tar -xzf "$dir/$file" -C "$dir" actionlint
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: actionlint
+        # Los ejemplos se lintean junto con los workflows reales: son lo que copian los clientes.
+        run: actionlint -color .github/workflows/*.yml examples/*.yml
+
+  hygiene-logic:
+    name: hygiene-logic
+    # Prueba los casos que deben fallar (falta una sección, .rej, conflictos),
+    # que no se pueden ejercitar llamando al workflow reutilizable.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # Solo se usa para un script suelto; no hay lockfile que cachear.
+          enable-cache: false
+
+      - name: Casos de pr-hygiene
+        run: uv run --no-project --with pyyaml==6.0.2 python tests/hygiene/test_pr_hygiene.py
+
+  ci:
+    name: ci
+    uses: ./.github/workflows/python-react.yml
+    with:
+      backend-dir: tests/fixture/backend
+      frontend-dir: tests/fixture/frontend
+
+  ci-postgres:
+    name: ci-postgres
+    # Ejercita el servicio Postgres y el salteo del job frontend con frontend-dir vacío.
+    uses: ./.github/workflows/python-react.yml
+    with:
+      backend-dir: tests/fixture/backend
+      frontend-dir: ""
+      postgres: true
+
+  pr-hygiene:
+    name: pr-hygiene
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/pr-hygiene.yml

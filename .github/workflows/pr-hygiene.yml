@@ -1,0 +1,222 @@
+# Controles de higiene de PR: secciones de evidencia en el cuerpo, tamaño del
+# diff, restos de merges (.rej, marcadores de conflicto) y escaneo de secretos.
+#
+# Pensado para el evento pull_request: usa el commit de merge que arma GitHub
+# (refs/pull/N/merge), donde HEAD^1 es la rama base y HEAD^2 la punta del PR.
+# Los nombres de los jobs (`hygiene`, `secret-scan`) son parte del contrato.
+name: pr-hygiene
+
+on:
+  workflow_call:
+    inputs:
+      required-sections:
+        description: Encabezados que el cuerpo del PR debe tener, uno por línea. Vacío = no se controla el cuerpo.
+        type: string
+        # Coincide con la plantilla de PR de los proyectos generados por la fábrica.
+        default: |
+          ## Qué cambia y por qué
+          ## Evidencia
+      require-section-content:
+        description: Exigir que cada sección requerida tenga contenido (no solo el encabezado o comentarios HTML).
+        type: boolean
+        default: true
+      max-diff-lines:
+        description: Líneas cambiadas (agregadas + borradas) a partir de las cuales se emite un aviso. No falla. 0 = sin aviso.
+        type: number
+        default: 400
+      diff-exclude:
+        description: Patrones (pathspec de git, separados por espacios) que no cuentan para el tamaño del diff.
+        type: string
+        default: "*.lock package-lock.json pnpm-lock.yaml yarn.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-hygiene-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Versión fijada de gitleaks y checksums SHA-256 publicados en el release
+  # (gitleaks_8.30.1_checksums.txt). Ver docs/decisiones/0003-escaner-de-secretos-y-versiones-fijadas.md.
+  # Cambiar la versión exige actualizar ambos checksums en el mismo commit.
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256_LINUX_X64: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  GITLEAKS_SHA256_LINUX_ARM64: e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
+
+jobs:
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::pr-hygiene solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Profundidad 2 alcanza: el commit de merge y sus dos padres (base y punta del PR).
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Secciones de evidencia en el cuerpo del PR
+        if: ${{ !cancelled() }}
+        env:
+          # El cuerpo entra por variable de entorno, nunca interpolado en el script,
+          # para que el autor del PR no pueda inyectar comandos.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REQUIRED_SECTIONS: ${{ inputs.required-sections }}
+          REQUIRE_CONTENT: ${{ inputs.require-section-content }}
+        shell: python3 {0}
+        run: |
+          """Verifica que el cuerpo del PR tenga los encabezados requeridos.
+
+          Un encabezado cuenta si alguna línea del cuerpo, sin espacios a los
+          costados, empieza con el texto requerido (sin distinguir mayúsculas).
+          Con REQUIRE_CONTENT, el texto hasta el siguiente encabezado markdown
+          no puede estar vacío ni ser solo comentarios HTML de la plantilla.
+          """
+          import os
+          import re
+          import sys
+
+          body = (os.environ.get("PR_BODY") or "").replace("\r\n", "\n")
+          required = [s.strip() for s in os.environ.get("REQUIRED_SECTIONS", "").splitlines() if s.strip()]
+          require_content = os.environ.get("REQUIRE_CONTENT", "true") == "true"
+
+          if not required:
+              print("Sin secciones requeridas configuradas: no se controla el cuerpo.")
+              sys.exit(0)
+
+          lines = body.split("\n")
+          heading = re.compile(r"^\s{0,3}#{1,6}\s")
+          errors = []
+          for section in required:
+              idx = next(
+                  (i for i, line in enumerate(lines) if line.strip().lower().startswith(section.lower())),
+                  None,
+              )
+              if idx is None:
+                  errors.append(f"Falta la sección '{section}' en el cuerpo del PR.")
+                  continue
+              if not require_content:
+                  continue
+              chunk = []
+              for line in lines[idx + 1:]:
+                  if heading.match(line):
+                      break
+                  chunk.append(line)
+              text = re.sub(r"<!--.*?-->", "", "\n".join(chunk), flags=re.S).strip()
+              if not text:
+                  errors.append(f"La sección '{section}' está vacía.")
+
+          for err in errors:
+              print(f"::error::{err}")
+          if errors:
+              sys.exit(1)
+          print("Secciones requeridas presentes: " + ", ".join(required))
+
+      - name: Tamaño del diff
+        if: ${{ !cancelled() && inputs.max-diff-lines > 0 }}
+        env:
+          MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
+          DIFF_EXCLUDE: ${{ inputs.diff-exclude }}
+        run: |
+          pathspec=(.)
+          for pattern in $DIFF_EXCLUDE; do
+            pathspec+=(":(exclude,glob)**/$pattern")
+          done
+          # Los archivos binarios aparecen como "-" en numstat y no suman líneas.
+          total=$(git diff --numstat HEAD^1 HEAD -- "${pathspec[@]}" \
+            | awk '$1 != "-" { s += $1 + $2 } END { print s + 0 }')
+          echo "Líneas cambiadas (sin excluidos): $total (umbral: $MAX_DIFF_LINES)"
+          if [ "$total" -gt "$MAX_DIFF_LINES" ]; then
+            echo "::warning::El diff tiene $total líneas cambiadas (umbral $MAX_DIFF_LINES). Considerá partir el PR."
+          fi
+
+      - name: Archivos .rej
+        if: ${{ !cancelled() }}
+        run: |
+          rej=$(git ls-files '*.rej')
+          if [ -n "$rej" ]; then
+            while IFS= read -r f; do echo "::error file=$f::Archivo .rej versionado (resto de un patch que no aplicó)."; done <<< "$rej"
+            exit 1
+          fi
+          echo "Sin archivos .rej."
+
+      - name: Marcadores de conflicto
+        if: ${{ !cancelled() }}
+        run: |
+          # Solo se miran líneas agregadas por el PR. "=======" suelto no se
+          # marca porque es un subrayado válido en reStructuredText y markdown.
+          hallazgos=$(git diff -U0 --no-color HEAD^1 HEAD | awk '
+            /^\+\+\+ / { file = substr($0, 7); next }
+            /^@@/ { split($3, a, ","); line = substr(a[1], 2) + 0; next }
+            /^\+/ {
+              if ($0 ~ /^\+(<<<<<<<|>>>>>>>|\|\|\|\|\|\|\|)( |$)/) print file ":" line
+              line++
+            }')
+          if [ -n "$hallazgos" ]; then
+            while IFS= read -r h; do
+              echo "::error file=${h%%:*},line=${h##*:}::Marcador de conflicto de merge."
+            done <<< "$hallazgos"
+            exit 1
+          fi
+          echo "Sin marcadores de conflicto."
+
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::pr-hygiene solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Historia completa para escanear cada commit del PR, no solo el árbol
+          # final: un secreto agregado y borrado en el mismo PR sigue en la historia.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Instalar gitleaks (versión fijada, checksum verificado)
+        run: |
+          case "$(uname -m)" in
+            x86_64) arch=x64; sum="$GITLEAKS_SHA256_LINUX_X64" ;;
+            aarch64|arm64) arch=arm64; sum="$GITLEAKS_SHA256_LINUX_ARM64" ;;
+            *) echo "::error::Arquitectura no soportada: $(uname -m)"; exit 1 ;;
+          esac
+          dir="$RUNNER_TEMP/gitleaks"
+          mkdir -p "$dir"
+          file="gitleaks_${GITLEAKS_VERSION}_linux_${arch}.tar.gz"
+          curl -fsSL --retry 3 -o "$dir/$file" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${file}"
+          echo "${sum}  $dir/$file" | sha256sum -c -
+          tar -xzf "$dir/$file" -C "$dir" gitleaks
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Escanear commits del PR
+        run: |
+          gitleaks version
+          # HEAD^1..HEAD^2 = commits del PR que no están en la base.
+          # Si el repo tiene .gitleaks.toml o .gitleaksignore en la raíz, gitleaks los usa.
+          gitleaks git . \
+            --log-opts="HEAD^1..HEAD^2" \
+            --redact \
+            --no-banner \
+            --verbose \
+            --exit-code 1

@@ -1,0 +1,17 @@
+{
+  "name": "fixture-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Frontend mínimo para el selftest de los workflows reutilizables.",
+  "type": "module",
+  "scripts": {
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/",
+    "build": "tsc --project tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}

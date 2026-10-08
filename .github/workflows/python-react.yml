@@ -1,0 +1,170 @@
+# CI reutilizable para repos con backend Python (uv) y frontend Node (npm).
+#
+# Los nombres de los jobs (`backend`, `frontend`) son parte del contrato:
+# se usan como status checks requeridos en los repos que llaman a este
+# workflow. Cambiarlos es un cambio incompatible (nueva versión mayor).
+name: python-react
+
+on:
+  workflow_call:
+    inputs:
+      backend-dir:
+        description: Directorio del backend (contiene pyproject.toml y uv.lock).
+        type: string
+        default: backend
+      frontend-dir:
+        description: Directorio del frontend (contiene package.json y package-lock.json). Vacío = no corre el job frontend.
+        type: string
+        default: frontend
+      python-version:
+        description: Versión de Python. Vacío = .python-version del backend, luego el de la raíz, luego 3.12.
+        type: string
+        default: ""
+      node-version:
+        description: Versión de Node.js.
+        type: string
+        default: "22"
+      run-pyright:
+        description: Correr pyright sobre el backend.
+        type: boolean
+        default: true
+      postgres:
+        description: Levantar un servicio Postgres para los tests y exportar DATABASE_URL.
+        type: boolean
+        default: false
+      postgres-image:
+        description: Imagen del servicio Postgres (solo si postgres es true).
+        type: string
+        default: postgres:17
+      frontend-scripts:
+        description: Scripts de npm a correr en orden, separados por espacios. Todos deben existir en package.json.
+        type: string
+        default: lint typecheck test build
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-react-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.backend-dir }}-${{ inputs.frontend-dir }}-${{ inputs.postgres }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.backend-dir }}
+    services:
+      postgres:
+        # Con imagen vacía GitHub no levanta el servicio.
+        image: ${{ inputs.postgres && inputs.postgres-image || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolver versión de Python
+        env:
+          INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        run: |
+          if [ -n "$INPUT_PYTHON_VERSION" ]; then
+            version="$INPUT_PYTHON_VERSION"
+            origen="input python-version"
+          elif [ -f .python-version ]; then
+            version="$(head -n 1 .python-version | tr -d '[:space:]')"
+            origen=".python-version del backend"
+          elif [ -f "$GITHUB_WORKSPACE/.python-version" ]; then
+            version="$(head -n 1 "$GITHUB_WORKSPACE/.python-version" | tr -d '[:space:]')"
+            origen=".python-version de la raíz"
+          else
+            version="3.12"
+            origen="valor por defecto"
+          fi
+          echo "Python $version ($origen)"
+          echo "UV_PYTHON=$version" >> "$GITHUB_ENV"
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-dir }}/uv.lock
+
+      - name: Exportar DATABASE_URL
+        if: inputs.postgres
+        run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test" >> "$GITHUB_ENV"
+
+      - name: uv sync --frozen
+        run: uv sync --frozen
+
+      - name: ruff check
+        run: uv run --frozen ruff check --output-format=github .
+
+      - name: ruff format --check
+        if: ${{ !cancelled() }}
+        run: uv run --frozen ruff format --check .
+
+      - name: pyright
+        if: ${{ !cancelled() && inputs.run-pyright }}
+        run: uv run --frozen pyright
+
+      - name: pytest
+        if: ${{ !cancelled() }}
+        run: uv run --frozen pytest
+
+  frontend:
+    name: frontend
+    if: inputs.frontend-dir != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.frontend-dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.frontend-dir }}/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Scripts de npm
+        env:
+          FRONTEND_SCRIPTS: ${{ inputs.frontend-scripts }}
+        run: |
+          fallidos=()
+          for script in $FRONTEND_SCRIPTS; do
+            echo "::group::npm run $script"
+            if ! npm run "$script"; then
+              fallidos+=("$script")
+              echo "::error::npm run $script falló"
+            fi
+            echo "::endgroup::"
+          done
+          if [ "${#fallidos[@]}" -gt 0 ]; then
+            echo "Scripts fallidos: ${fallidos[*]}"
+            exit 1
+          fi

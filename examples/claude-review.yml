@@ -1,0 +1,23 @@
+# Ejemplo para un repo cliente: copiar a .github/workflows/claude-review.yml.
+# Requiere el secreto ANTHROPIC_API_KEY o CLAUDE_CODE_OAUTH_TOKEN en el repo u organización.
+# Check resultante: "claude-review / review". Es informativo: no marcarlo como requerido.
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# El workflow llamado no puede tener más permisos que los que da el que llama.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  claude-review:
+    uses: solbeet-factory/workflows/.github/workflows/claude-review.yml@v1
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    # with:
+    #   model: <id del modelo>   # vacío = modelo por defecto de la action
