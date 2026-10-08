@@ -48,7 +48,7 @@ Cada workflow reutilizable es un archivo autocontenido: no depende de otros arch
 
 ## Qué entrega a otros repos de la fábrica
 
-- `solbeet-template` genera en cada proyecto `ci.yml` y `claude-review.yml` que llaman a `python-react.yml@v1` y `claude-review.yml@v1`. La plantilla de PR de ese repo define las secciones que `pr-hygiene` exige por defecto (`## Qué cambia y por qué`, `## Evidencia`). Si una cambia, la otra también.
+- `solbeet-template` (desde v0.1.1) genera en cada proyecto `ci.yml`, `claude-review.yml` y `pr-hygiene.yml`, que llaman a `python-react.yml@v1`, `claude-review.yml@v1` y `pr-hygiene.yml@v1` con los mismos ids de job que `examples/` (`ci`, `claude-review`, `pr-hygiene`), así los checks requeridos se llaman igual en todos los repos. `ci.yml` pasa siempre `frontend-dir` (vacío si no hay frontend), porque el default de este repo es `frontend`. La plantilla de PR de ese repo define las secciones que `pr-hygiene` exige por defecto (`## Qué cambia y por qué`, `## Evidencia`). Si una cambia, la otra también.
 - El contrato estable para los consumidores: nombres de archivo, nombres de jobs, inputs y secretos documentados en el README ([ADR 0002](decisiones/0002-contrato-de-nombres-y-versionado.md)).
 
 ## Límites: qué NO hace

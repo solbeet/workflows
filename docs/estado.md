@@ -1,6 +1,6 @@
 # Estado
 
-Última actualización: 2026-10-08 · Versión: v1.0.0 (sin publicar en GitHub)
+Última actualización: 2026-10-08 · Versión: v1.0.1 (sin publicar en GitHub)
 
 ## Qué funciona y cómo se verificó
 
@@ -16,6 +16,8 @@ Todo verificado localmente en macOS arm64, con los comandos de `docs/desarrollo.
 | Comandos del job `frontend` sobre el fixture | `npm ci`, `npm run lint`, `typecheck`, `test`, `build` | todo en verde; node --test: 3 pass |
 | Comando de gitleaks de `secret-scan` | `gitleaks git . --log-opts="HEAD^1..HEAD^2" --redact --no-banner --exit-code 1` con el binario 8.30.1 darwin (checksum verificado) en un repo con merge `--no-ff` | detecta una clave agregada en un commit y borrada en el siguiente (exit 1); sin commits en el rango, "no leaks found" |
 | Checksums de gitleaks y actionlint | `shasum -a 256 -c` contra el `checksums.txt` de cada release | coinciden |
+| Callers que genera `solbeet-template` v0.1.1 (`ci.yml`, `claude-review.yml`, `pr-hygiene.yml`) | `scripts/verificar-plantilla.sh` de la plantilla con actionlint 1.7.12 en el PATH | sin hallazgos; inputs, secretos y ids de job coinciden con `examples/` |
+| Paso "Secciones de evidencia" contra las plantillas de PR reales | script del paso extraído del YAML, con `PR_BODY` = plantilla de `solbeet-template` y `plantilla-pr.md` del plugin | plugin v0.1.1: pasa; plantilla sin completar: falla con "sección vacía" (esperado: obliga a escribir el porqué); plugin v0.1.0: fallaba por `## Qué cambia` |
 | Tag de la imagen Docker de actionlint documentada | API de Docker Hub `rhysd/actionlint:1.7.12` | existe |
 
 ## Qué NO se probó
@@ -44,5 +46,5 @@ Todo verificado localmente en macOS arm64, con los comandos de `docs/desarrollo.
 1. Crear el repo público `solbeet-factory/workflows`, hacer push de `main` y de los tags `v1.0.0` y `v1`, y confirmar que `selftest` pasa en verde en GitHub. Corregir lo que aparezca y publicar `v1.0.1` si hace falta.
 2. Elegir y agregar una licencia (`LICENSE`) antes de hacerlo público.
 3. Probar `claude-review.yml` desde un repo de prueba con un secreto real; ajustar el prompt según los primeros resultados.
-4. Probar los tres ejemplos desde un proyecto generado con `solbeet-template` y configurar la protección de rama con los checks del README.
+4. Ejecutar en GitHub los tres callers desde un proyecto generado con `solbeet-template` (ya los genera, lintados) y configurar la protección de rama con los checks del README.
 5. Evaluar un input `runs-on` para runners propios y si conviene exigir que las casillas de `## Evidencia` estén marcadas.

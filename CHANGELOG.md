@@ -4,6 +4,15 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ## [Sin publicar]
 
+## [1.0.1] - 2026-10-08
+
+Sin cambios en los workflows: solo documentación. `v1` se mueve a esta versión.
+
+### Cambiado
+
+- `docs/arquitectura.md`: la plantilla genera también `pr-hygiene.yml` y pasa siempre `frontend-dir`; ids de job alineados con `examples/`.
+- `docs/estado.md`: verificación cruzada con la plantilla de PR de `solbeet-template` y la del plugin `solbeet` (la del plugin no pasaba `hygiene` antes de su v0.1.1).
+
 ## [1.0.0] - 2026-10-08
 
 ### Agregado
