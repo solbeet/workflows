@@ -4,6 +4,15 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ## [Sin publicar]
 
+## [1.1.0] - 2026-10-08
+
+Sin tag todavía: se etiqueta al mergear a `main` y `v1` se mueve a esta versión (cambio compatible).
+
+### Agregado
+
+- `imagen.yml`: workflow reutilizable que construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` (tags `X.Y.Z` desde un tag `vX.Y.Z` y `sha-<sha7>`; nunca `latest`). Acciones fijadas por SHA: `docker/setup-buildx-action` v4.4.1, `docker/login-action` v4.6.0, `docker/metadata-action` v6.2.0, `docker/build-push-action` v7.4.0. [ADR 0006](docs/decisiones/0006-imagenes-en-ghcr.md).
+- `examples/imagenes.yml`: caller que publica al pushear un tag `v*.*.*`.
+
 ## [1.0.2] - 2026-10-08
 
 Sin cambios en la lógica de los workflows. `v1` se mueve a esta versión.

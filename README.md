@@ -15,6 +15,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`python-react.yml`](.github/workflows/python-react.yml) | CI de backend Python con uv (ruff, pyright, pytest) y frontend Node con npm (lint, typecheck, test, build) | `backend`, `frontend` |
 | [`claude-review.yml`](.github/workflows/claude-review.yml) | Revisor independiente de PRs con `anthropics/claude-code-action`: spec, tests, bugs y seguridad, evidencia. Deja comentarios inline y un resumen con veredicto | `review` |
 | [`pr-hygiene.yml`](.github/workflows/pr-hygiene.yml) | Secciones de evidencia en el cuerpo del PR, aviso por diff grande, archivos `.rej`, marcadores de conflicto y escaneo de secretos con gitleaks | `hygiene`, `secret-scan` |
+| [`imagen.yml`](.github/workflows/imagen.yml) | Construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` con tag = versión semver sin `v` y `sha-<sha7>` (sin `latest`). Usa el `GITHUB_TOKEN` con `packages: write` | `imagen` (no es check requerido) |
 | [`selftest.yml`](.github/workflows/selftest.yml) | Uso interno: lintea los workflows y los ejecuta contra el fixture de `tests/fixture/` | — |
 
 ## Requisitos (repo cliente)
