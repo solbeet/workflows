@@ -25,7 +25,7 @@ on:
       plataformas:
         description: Plataformas del build, separadas por coma.
         type: string
-        default: linux/amd64
+        default: linux/amd64,linux/arm64
       publicar:
         description: false = solo construye (sirve para probar el Dockerfile en un PR).
         type: boolean
@@ -46,6 +46,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # QEMU permite construir linux/arm64 en el runner x86 (los servidores pueden ser ARM o x86).
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: contains(inputs.plataformas, 'arm64')
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Login a ghcr.io
         if: inputs.publicar
