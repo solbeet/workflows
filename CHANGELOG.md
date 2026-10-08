@@ -6,7 +6,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ## [1.1.0] - 2026-10-08
 
-Sin tag todavía: se etiqueta al mergear a `main` y `v1` se mueve a esta versión (cambio compatible).
+Tag local en la rama `integracion/opcion-b` (sin push): se publica después de mergear el PR con merge commit. Al publicarlo, `v1` se mueve a esta versión (cambio compatible).
 
 ### Agregado
 

@@ -1,6 +1,6 @@
 # Estado
 
-Última actualización: 2026-10-08 · Versión: v1.1.0 en la rama `integracion/opcion-b` (sin tag; publicado hasta v1.0.3)
+Última actualización: 2026-10-08 · Versión: v1.1.0 en la rama `integracion/opcion-b` (tag local `v1.1.0`, sin push; publicado hasta v1.0.3)
 
 ## Qué funciona y cómo se verificó
 
