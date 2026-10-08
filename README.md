@@ -6,6 +6,8 @@ Dónde encaja: es la pieza de CI de la fábrica (ver [`../README.md`](../README.
 
 Este repo está pensado para ser **público**: GitHub solo deja llamar workflows reutilizables de otra organización si el repo que los contiene es público ([ADR 0001](docs/decisiones/0001-repo-publico.md)). Por eso no contiene secretos, hostnames internos ni nada específico de un cliente.
 
+Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-licencia-propietaria.md)). El código es visible para que los repos de clientes de Solbeet lo llamen con `uses:`; no se otorga licencia de copia, modificación ni redistribución.
+
 ## Contenido
 
 | Workflow | Qué hace | Jobs (checks) |
@@ -37,7 +39,7 @@ El núcleo de cada ejemplo:
 ```yaml
 jobs:
   ci:
-    uses: solbeet-factory/workflows/.github/workflows/python-react.yml@v1
+    uses: solbeet/workflows/.github/workflows/python-react.yml@v1
     with:
       backend-dir: backend
       frontend-dir: frontend
@@ -50,7 +52,7 @@ permissions:
   issues: read
 jobs:
   claude-review:
-    uses: solbeet-factory/workflows/.github/workflows/claude-review.yml@v1
+    uses: solbeet/workflows/.github/workflows/claude-review.yml@v1
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -62,7 +64,7 @@ on:
     types: [opened, synchronize, reopened, edited, ready_for_review]
 jobs:
   pr-hygiene:
-    uses: solbeet-factory/workflows/.github/workflows/pr-hygiene.yml@v1
+    uses: solbeet/workflows/.github/workflows/pr-hygiene.yml@v1
 ```
 
 `secrets: inherit` también sirve en lugar de pasar los secretos uno por uno.
@@ -156,5 +158,5 @@ Procedimiento completo en [`docs/desarrollo.md`](docs/desarrollo.md#publicar-una
 | [`docs/arquitectura.md`](docs/arquitectura.md) | Componentes, flujo, qué consume y qué entrega, límites |
 | [`docs/desarrollo.md`](docs/desarrollo.md) | Entorno, pruebas, cómo probar un cambio de punta a punta, publicar una versión, problemas comunes |
 | [`docs/estado.md`](docs/estado.md) | Qué funciona y cómo se verificó, qué no se probó, pendientes |
-| [`docs/decisiones/`](docs/decisiones/) | ADRs: [0001 repo público](docs/decisiones/0001-repo-publico.md), [0002 nombres de jobs y versionado](docs/decisiones/0002-contrato-de-nombres-y-versionado.md), [0003 escáner de secretos y versiones fijadas](docs/decisiones/0003-escaner-de-secretos-y-versiones-fijadas.md), [0004 revisor con Claude](docs/decisiones/0004-revisor-con-claude.md) |
+| [`docs/decisiones/`](docs/decisiones/) | ADRs: [0001 repo público](docs/decisiones/0001-repo-publico.md), [0002 nombres de jobs y versionado](docs/decisiones/0002-contrato-de-nombres-y-versionado.md), [0003 escáner de secretos y versiones fijadas](docs/decisiones/0003-escaner-de-secretos-y-versiones-fijadas.md), [0004 revisor con Claude](docs/decisiones/0004-revisor-con-claude.md), [0005 licencia propietaria](docs/decisiones/0005-licencia-propietaria.md) |
 | [`CHANGELOG.md`](CHANGELOG.md) | Cambios por versión |

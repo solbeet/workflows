@@ -9,7 +9,7 @@ Los repos de los clientes viven en la organización de GitHub de cada cliente, n
 
 ## Decisión
 
-`solbeet-factory/workflows` es un repo público. Todo su contenido se escribe sabiendo que cualquiera lo puede leer y llamar:
+`solbeet/workflows` es un repo público. Todo su contenido se escribe sabiendo que cualquiera lo puede leer y llamar:
 
 - Ningún secreto, token, hostname o IP interna, nombre de cliente ni de otros productos de la empresa.
 - Los secretos los aporta el repo que llama (`secrets:` o `secrets: inherit`), nunca este repo.

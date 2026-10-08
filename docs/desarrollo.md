@@ -12,7 +12,7 @@ Herramientas necesarias (ninguna se instala a nivel sistema desde este repo):
 | `shellcheck` (opcional) | que actionlint revise los scripts `run:` | `shellcheck --version` |
 
 ```bash
-git clone https://github.com/solbeet-factory/workflows.git
+git clone https://github.com/solbeet/workflows.git
 cd workflows
 scripts/lint-workflows.sh
 ```
@@ -57,7 +57,7 @@ Los workflows solo se ejecutan de verdad en GitHub. No hay `act` en el flujo.
 1. Abrir un PR en este repo. `selftest.yml` llama a los workflows por ruta local, así que prueba exactamente la versión del PR: actionlint, casos de `pr-hygiene`, `python-react` con y sin Postgres contra el fixture, y `pr-hygiene` sobre el propio PR (el cuerpo tiene que seguir `.github/pull_request_template.md`).
 2. Para probar desde un repo cliente real antes de publicar, apuntar su workflow a la rama del PR:
    ```yaml
-   uses: solbeet-factory/workflows/.github/workflows/python-react.yml@nombre-de-la-rama
+   uses: solbeet/workflows/.github/workflows/python-react.yml@nombre-de-la-rama
    ```
    y abrir un PR de prueba en ese repo. Volver a `@v1` antes de mergear allá.
 3. `claude-review.yml` no se ejercita en `selftest` (necesita secretos y una llamada paga). Probarlo desde un repo de prueba con el secreto configurado, con el paso 2.

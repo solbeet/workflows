@@ -4,6 +4,18 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ## [Sin publicar]
 
+## [1.0.2] - 2026-10-08
+
+Sin cambios en la lógica de los workflows. `v1` se mueve a esta versión.
+
+### Agregado
+
+- `LICENSE` con aviso de licencia propietaria y [ADR 0005](docs/decisiones/0005-licencia-propietaria.md).
+
+### Cambiado
+
+- Org de GitHub `solbeet` en lugar de `solbeet-factory` en `examples/`, el README y `docs/`. Los callers tienen que usar `solbeet/workflows/.github/workflows/<archivo>@v1`.
+
 ## [1.0.1] - 2026-10-08
 
 Sin cambios en los workflows: solo documentación. `v1` se mueve a esta versión.

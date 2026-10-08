@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   claude-review:
-    uses: solbeet-factory/workflows/.github/workflows/claude-review.yml@v1
+    uses: solbeet/workflows/.github/workflows/claude-review.yml@v1
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

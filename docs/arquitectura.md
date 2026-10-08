@@ -31,7 +31,7 @@ Cada workflow reutilizable es un archivo autocontenido: no depende de otros arch
 ## Flujo de un PR en un repo cliente
 
 1. Se abre o actualiza un PR. GitHub dispara los tres workflows del cliente.
-2. Cada uno resuelve `solbeet-factory/workflows/...@v1` al commit al que apunta el tag `v1` en ese momento y corre los jobs de acá con el contexto del cliente (`github.repository`, el evento, sus secretos si los pasa).
+2. Cada uno resuelve `solbeet/workflows/...@v1` al commit al que apunta el tag `v1` en ese momento y corre los jobs de acá con el contexto del cliente (`github.repository`, el evento, sus secretos si los pasa).
 3. Los jobs hacen checkout del repo del cliente (el commit de merge del PR) y corren los controles.
 4. Resultados:
    - `ci / backend`, `ci / frontend`, `pr-hygiene / hygiene`, `pr-hygiene / secret-scan`: status checks; los cuatro deberían ser requeridos en la protección de rama.

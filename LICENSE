@@ -1,0 +1,12 @@
+Copyright (c) 2026 Solbeet. Todos los derechos reservados.
+
+Este repositorio es software propietario de Solbeet.
+
+El repositorio es público solo para que los repositorios de clientes de Solbeet
+puedan llamar a sus workflows reutilizables con `uses:` desde GitHub Actions,
+como parte del servicio que Solbeet les presta. Ese uso se rige por el acuerdo
+entre Solbeet y cada cliente.
+
+Que el código sea visible no otorga ninguna licencia. No se otorga licencia de
+copia, modificación ni redistribución, total o parcial, ni de uso fuera del
+fin indicado arriba, salvo autorización escrita de Solbeet.
