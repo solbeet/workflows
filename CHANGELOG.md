@@ -2,6 +2,11 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [1.3.0] - 2026-10-11
+
+### Agregado
+- `imagen.yml`: anotaciones OCI (incluida `org.opencontainers.image.revision` con el sha completo) en cada manifiesto y en el índice multi-arch (`DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index`), además del label que ya estaba. Outputs `tag` (`sha-<sha7>`) y `revision` (sha completo) para el caller. Motivo: el deploy a staging de solbeet-run (contrato v5 «Deploy por ambientes», roadmap F1.2) y los estados derivados (ADR 0002 de la fábrica) necesitan el sha completo; `sha-<sha7>` solo es ambiguo para la API de compare.
+
 ## [1.2.0] - 2026-10-08
 
 ### Cambiado

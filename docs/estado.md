@@ -1,6 +1,6 @@
 # Estado
 
-Última actualización: 2026-10-08 · Versión: v1.1.0 en la rama `integracion/opcion-b` (tag local `v1.1.0`, sin push; publicado hasta v1.0.3)
+Última actualización: 2026-10-11 · Versión: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint sin hallazgos; la verificación en ghcr.io se anota abajo). Antes: v1.2.0 (multi-arquitectura)
 
 ## Qué funciona y cómo se verificó
 

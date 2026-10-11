@@ -5,6 +5,13 @@
 # y `sha-<sha7>` siempre. No publica `latest`: los consumidores (solbeet-infra,
 # charts) fijan la versión. Usa el GITHUB_TOKEN del workflow que llama, que
 # necesita `packages: write`; no hace falta ningún secreto.
+#
+# El sha completo del commit va en el label `org.opencontainers.image.revision`
+# de cada imagen y, desde v1.3.0, también como anotación del índice multi-arch y
+# de cada manifiesto: `sha-<sha7>` solo es ambiguo para la API de compare de
+# GitHub (ADR 0002 de la fábrica). Outputs `tag` y `revision` para el caller. El
+# deploy a staging lo hace solbeet-run al ver esta suite en verde en main
+# (contrato v5 «Deploy por ambientes»).
 name: imagen
 
 on:
@@ -30,6 +37,13 @@ on:
         description: false = solo construye (sirve para probar el Dockerfile en un PR).
         type: boolean
         default: true
+    outputs:
+      tag:
+        description: Tag inmutable publicado (`sha-<sha7>`).
+        value: ${{ jobs.imagen.outputs.tag }}
+      revision:
+        description: Sha completo del commit construido (40 hex).
+        value: ${{ jobs.imagen.outputs.revision }}
 
 permissions:
   contents: read
@@ -42,7 +56,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tag: sha-${{ steps.revision.outputs.corto }}
+      revision: ${{ github.sha }}
     steps:
+      - name: Revisión
+        id: revision
+        run: echo "corto=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -60,6 +80,11 @@ jobs:
       - name: Tags y labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          # Anotaciones (incluida org.opencontainers.image.revision) en cada manifiesto y en el
+          # índice multi-arch: así `docker buildx imagetools inspect` del tag muestra el sha
+          # completo sin bajar la config de una plataforma.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ inputs.imagen }}
           flavor: |
@@ -76,4 +101,5 @@ jobs:
           push: ${{ inputs.publicar }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
