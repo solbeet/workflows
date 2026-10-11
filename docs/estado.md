@@ -1,6 +1,6 @@
 # Estado
 
-Última actualización: 2026-10-11 · Versión: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint sin hallazgos; la verificación en ghcr.io se anota abajo). Antes: v1.2.0 (multi-arquitectura)
+Última actualización: 2026-10-11 · Versión: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
 
 ## Qué funciona y cómo se verificó
 
