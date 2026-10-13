@@ -636,7 +636,8 @@ jobs:
             # check, firma) en un archivo; el veredicto lo arma el paso siguiente.
             uv tool run --from "schemathesis==${VERSION_SCHEMATHESIS}" schemathesis run \
               "http://127.0.0.1:$1/openapi.json" --checks "$CHECKS" --max-examples "$MAX_EXAMPLES" \
-              --generation-deterministic --baseline-update --baseline "$2" --no-color || true
+              --generation-deterministic --baseline-update --baseline "$2" \
+              --report ndjson --report-ndjson-path "$2.ndjson" --no-color || true
           }
 
           if [ -f "$BASE_DIR/$BACKEND_DIR/pyproject.toml" ] && levantar "$BASE_DIR/$BACKEND_DIR" 8001 solbeet_base "$RUNNER_TEMP/app-base.log"; then
@@ -672,6 +673,50 @@ jobs:
           for op in sorted({k[0] for k in keys(sys.argv[1]) - base}):
               print(op)
           PY
+            # 1) Reenviar a la base las mismas peticiones que dieron 5xx en el PR: si la
+            #    base también responde 5xx, el fallo es heredado. Es determinista.
+            python3 - "$RUNNER_TEMP/contrato-pr.json.ndjson" "$RUNNER_TEMP/candidatos.txt" "$RUNNER_TEMP/contrato-confirmados.json" <<'PY'
+          import base64, json, sys, urllib.request, urllib.error
+          nd, cand, out = sys.argv[1], sys.argv[2], sys.argv[3]
+          ops = {l.strip() for l in open(cand) if l.strip()}
+          pedidos = {}
+          try:
+              lines = open(nd).read().splitlines()
+          except FileNotFoundError:
+              lines = []
+          for line in lines:
+              ev = json.loads(line).get("ScenarioFinished")
+              if not ev:
+                  continue
+              rec = ev.get("recorder", {})
+              for cid, checks in rec.get("checks", {}).items():
+                  for c in checks:
+                      if c.get("status") != "failure" or c.get("name") != "not_a_server_error":
+                          continue
+                      op = c.get("failure_info", {}).get("failure", {}).get("operation") or rec.get("label")
+                      inter = rec.get("interactions", {}).get(cid)
+                      if op in ops and inter:
+                          pedidos.setdefault(op, []).append(inter["request"])
+          confirmados = []
+          for op, reqs in pedidos.items():
+              for req in reqs[:5]:
+                  body = req.get("body")
+                  data = base64.b64decode(body["$base64"]) if isinstance(body, dict) and "$base64" in body else None
+                  headers = {k: v[0] for k, v in (req.get("headers") or {}).items() if v}
+                  url = req["uri"].replace("127.0.0.1:8000", "127.0.0.1:8001", 1)
+                  try:
+                      status = urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers, method=req["method"]), timeout=10).status
+                  except urllib.error.HTTPError as e:
+                      status = e.code
+                  except Exception:
+                      status = 0
+                  if status >= 500:
+                      print(f"{op}: la misma petición también da {status} en la base (heredado).")
+                      confirmados.append([op, "not_a_server_error"])
+                      break
+          json.dump(confirmados, open(out, "w"))
+          PY
+            # 2) Para el resto, insistir con más casos solo en esa operación.
             while IFS= read -r op; do
               [ -n "$op" ] || continue
               echo "::group::Confirmación sobre la base: $op"
@@ -688,6 +733,7 @@ jobs:
         env:
           BASELINE_PR: ${{ runner.temp }}/contrato-pr.json
           BASELINE_BASE: ${{ runner.temp }}/contrato-base.json
+          CONFIRMADOS: ${{ runner.temp }}/contrato-confirmados.json
         shell: python3 {0}
         run: |
           """Frena solo los fallos de contrato que no estaban en la base."""
@@ -708,8 +754,17 @@ jobs:
 
           pr = entradas(os.environ["BASELINE_PR"])
           base = entradas(os.environ["BASELINE_BASE"])
-          nuevos = [pr[k] for k in pr if k not in base]
-          heredados = [pr[k] for k in pr if k in base]
+          try:
+              with open(os.environ["CONFIRMADOS"]) as f:
+                  confirmados = {tuple(x) for x in json.load(f)}
+          except (FileNotFoundError, KeyError):
+              confirmados = set()
+
+          def heredado(k):
+              return k in base or (k[0], k[1]) in confirmados
+
+          nuevos = [pr[k] for k in pr if not heredado(k)]
+          heredados = [pr[k] for k in pr if heredado(k)]
           for e in heredados:
               print(f"::warning::{e['operation']}: {e['check']} ({e['signature']}) ya fallaba en la base.")
           for e in nuevos:

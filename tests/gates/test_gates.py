@@ -97,7 +97,7 @@ def build_cases(inputs: dict[str, dict[str, object]], tmp: str) -> list[Case]:
         "ROOT_BASE": base_root,
         "MIN_SEVERITY": "7",
     }
-    c_env = {"BASELINE_PR": f"{tmp}/c-pr.json", "BASELINE_BASE": f"{tmp}/c-base.json"}
+    c_env = {"BASELINE_PR": f"{tmp}/c-pr.json", "BASELINE_BASE": f"{tmp}/c-base.json", "CONFIRMADOS": f"{tmp}/c-conf.json"}
     s_env = {"BLOCKING_RULES": blocking, "SQL_DIR": f"{tmp}/sql"}
     sq = "squawk sobre las migraciones nuevas"
     return [
@@ -146,6 +146,15 @@ def build_cases(inputs: dict[str, dict[str, object]], tmp: str) -> list[Case]:
             {"c-pr.json": contrato(("PATCH /items/{id}", "500"), ("GET /version", "500")), "c-base.json": contrato(("PATCH /items/{id}", "500"))},
             c_env,
             "::error::GET /version",
+        ),
+        Case(
+            "contrato: la misma petición da 5xx en la base, es heredado",
+            "contrato",
+            "Veredicto del contrato",
+            True,
+            {"c-pr.json": contrato(("POST /items", "500")), "c-base.json": contrato(), "c-conf.json": [["POST /items", "not_a_server_error"]]},
+            c_env,
+            "ya fallaba en la base",
         ),
         Case(
             "contrato: base sin app, todo es nuevo",
