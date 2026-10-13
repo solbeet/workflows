@@ -2,6 +2,15 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [1.4.0] - 2026-10-13
+
+Sin tag publicado: se etiqueta al mergear (ver `docs/desarrollo.md`). Al publicarlo, `v1` se mueve (workflow nuevo, compatible).
+
+### Agregado
+
+- `gates.yml` (fase V, ítem V1, solbeet/workflows#8): jobs `cobertura-cambio` (diff-cover ≥ 80%), `migraciones` (pytest-alembic + squawk sobre el SQL de las migraciones nuevas), `contrato` (Schemathesis contra la app levantada en el runner) y `dependencias` (OSV-Scanner). Solo frenan lo que introduce el PR: comparan contra la rama base. [ADR 0007](docs/decisiones/0007-gates-sobre-el-diff.md).
+- `examples/gates.yml` y casos de veredicto en `tests/gates/test_gates.py` (corren en `selftest / hygiene-logic`).
+
 ## [1.3.0] - 2026-10-11
 
 ### Agregado
