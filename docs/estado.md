@@ -1,6 +1,17 @@
 # Estado
 
-Última actualización: 2026-10-13 · Sin publicar: v1.4.0 (`gates.yml`, fase V ítem V1; ver «v1.4.0» abajo). Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
+Última actualización: 2026-10-13 · Sin publicar: v1.4.0 (`gates.yml`, V1) y v1.5.0 (`guardia-tests.yml`, V2); ver abajo. Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
+
+## v1.5.0 (sin publicar): `guardia-tests.yml`
+
+| Qué | Cómo | Resultado |
+|---|---|---|
+| Reglas y vía de escape | `tests/guardia/test_guardia.py` (repos git temporales, API de GitHub simulada) | 30/30 casos: borrar, debilitar (assert, valor esperado, caso de parametrize), saltear (decorador, `pytestmark`, conftest, `.only`), tocar aceptación → rojo; tests nuevos, setup, reformateo, mover → verde; label de persona después del push → verde; del autor, de un bot, previo al push o sacado → rojo |
+| Trampa estilo ImpossibleBench en un repo real | `solbeet-pruebas/app-prueba#15`: cambia el orden del listado y ajusta el valor esperado del test existente | `solbeet / tests` en rojo; el resto verde |
+| Contraprueba | `app-prueba#17` | `solbeet / tests` en verde |
+| Falsos positivos sobre historia real | el paso de la guardia reproducido sobre los últimos 30 PRs mergeados de `solbeet-run`, `solbeet-plataforma`, `solbeet-bandeja` y `solbeet-conector` | 23 pasan, 7 frenan; en los 7 el PR cambió de verdad un valor esperado o sacó un test (ninguna detección errónea). Con la primera regla («cualquier cambio a un test existente») frenaban 18 |
+
+No verificado: la vía de escape contra la API real de GitHub (requiere que una persona ponga el label; está cubierta con la API simulada).
 
 ## v1.4.0 (sin publicar): `gates.yml`
 

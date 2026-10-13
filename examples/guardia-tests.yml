@@ -1,0 +1,22 @@
+# Ejemplo para un repo cliente: copiar a .github/workflows/guardia-tests.yml.
+# Check resultante (candidato a requerido para el merge automático): "solbeet / tests".
+# Falla si el PR borra, modifica o saltea tests existentes sin el dale de una persona
+# (label `tests-con-dale`, puesto por alguien que no es el autor, después del último push).
+name: guardia-tests
+
+on:
+  pull_request:
+    # labeled/unlabeled: poner o sacar el label vuelve a evaluar el check.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+# El reutilizable lee los eventos del PR y las corridas del commit; no escribe nada.
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  actions: read
+
+jobs:
+  guardia:
+    name: solbeet
+    uses: solbeet/workflows/.github/workflows/guardia-tests.yml@v1

@@ -17,6 +17,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`pr-hygiene.yml`](.github/workflows/pr-hygiene.yml) | Secciones de evidencia en el cuerpo del PR, aviso por diff grande, archivos `.rej`, marcadores de conflicto y escaneo de secretos con gitleaks | `hygiene`, `secret-scan` |
 | [`imagen.yml`](.github/workflows/imagen.yml) | Construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` con tag = versión semver sin `v` y `sha-<sha7>` (sin `latest`); el sha completo va como label y anotación `org.opencontainers.image.revision` (outputs `tag` y `revision`). Usa el `GITHUB_TOKEN` con `packages: write` | `imagen` (no es check requerido) |
 | [`gates.yml`](.github/workflows/gates.yml) | Gates sobre el diff del PR (fase V): cobertura de las líneas cambiadas, migraciones (pytest-alembic + squawk), contrato de la API (Schemathesis) y dependencias vulnerables (OSV-Scanner). Solo frena lo que introduce el PR | `cobertura-cambio`, `migraciones`, `contrato`, `dependencias` |
+| [`guardia-tests.yml`](.github/workflows/guardia-tests.yml) | Guardia de tests (fase V): frena el PR que borra, debilita o saltea tests existentes, o toca tests de aceptación, salvo dale de una persona (label) | `tests` |
 | [`selftest.yml`](.github/workflows/selftest.yml) | Uso interno: lintea los workflows y los ejecuta contra el fixture de `tests/fixture/` | — |
 
 ## Requisitos (repo cliente)
@@ -159,6 +160,30 @@ Secretos: ninguno. Permisos: `contents: read`. Output del job `migraciones`: `de
 
 Herramientas fijadas: squawk 2.66.0 y OSV-Scanner 2.6.0 (binarios con SHA-256), coverage 7.16.2, diff-cover 10.6.0, pytest-alembic 0.13.0, Schemathesis 4.28.0, uvicorn 0.53.0 (por PyPI, versión exacta). El cliente no tiene que declararlas en sus dependencias.
 
+### `guardia-tests.yml`
+
+Un agente que no logra pasar un test tiende a cambiar el test (ImpossibleBench, 2025). Este check lo frena sin juez LLM, comparando la base con el PR ([ADR 0008](docs/decisiones/0008-guardia-de-tests.md)). Solo con el evento `pull_request`.
+
+| Input | Tipo | Default | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `test-paths` | string (multilínea) | `tests/*`, `*/tests/*`, `test_*.py`, `conftest.py`, `*.test.*`, `*.spec.*`, … | no | Patrones fnmatch de archivos de tests. |
+| `acceptance-dir` | string | `tests/aceptacion` | no | Carpeta de tests de aceptación (en cualquier nivel). |
+| `override-label` | string | `tests-con-dale` | no | Label del dale humano. |
+| `override-approvers` | string | `""` | no | Logins que pueden dar el dale. Vacío = cualquier persona que no sea el autor ni un bot. |
+
+Permisos que necesita del caller: `contents: read`, `pull-requests: read`, `issues: read`, `actions: read` (lee quién puso el label y cuándo llegó el último push; no escribe nada). El caller tiene que escuchar `labeled` y `unlabeled` para reevaluar al poner el label.
+
+| Frena | Ejemplo |
+|---|---|
+| borrar un archivo de tests o un test que existía | `test_suma` desaparece |
+| debilitar un test existente: sacar o cambiar un assert, `self.assert*`, `mock.assert_*`, `pytest.raises`/`warns` o un caso de `parametrize` | `assert suma(2, 3) == 5` pasa a `== 6` |
+| saltear tests existentes | `@pytest.mark.skip` en un test que estaba, `pytestmark` a nivel módulo, skip en `conftest.py`, `.only`/`.skip`/`xit` |
+| tocar un archivo existente de `tests/aceptacion/` | cualquier cambio |
+
+No frena: tests nuevos (en archivos nuevos o existentes), cambiar setup, fixtures o helpers, reformatear, imports, docstrings, mover archivos sin cambios. Los salteos dentro de tests nuevos los ve `rojo-verde.yml`.
+
+**Dale humano:** una persona revisa el cambio y pone el label `tests-con-dale`. Vale si lo puso alguien que no es bot ni autor del PR (y está en `override-approvers`, si se configuró) **después del último push**: si el PR cambia, hay que volver a ponerlo. El uso queda en el resumen del job.
+
 ## Checks requeridos
 
 Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que llama> / <job del reutilizable>`. Con los ejemplos de `examples/` quedan:
@@ -170,6 +195,7 @@ Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que lla
 | `pr-hygiene / hygiene` | sí |
 | `pr-hygiene / secret-scan` | sí |
 | `solbeet / cobertura-cambio`, `solbeet / migraciones`, `solbeet / contrato`, `solbeet / dependencias` | sí, antes de prender el merge automático (con `examples/gates.yml`, cuyo job se llama `solbeet`) |
+| `solbeet / tests` | sí, antes de prender el merge automático (con `examples/guardia-tests.yml`) |
 | `claude-review / review` | **no**: es informativo. Depende de un servicio externo y de secretos que los forks no reciben |
 
 Si el repo cliente le pone otro id (o `name:`) al job que llama, la primera parte del nombre cambia. Los nombres de los jobs de este repo (`backend`, `frontend`, `review`, `hygiene`, `secret-scan`) son parte del contrato y solo cambian en una versión mayor.

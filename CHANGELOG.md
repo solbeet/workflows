@@ -2,6 +2,15 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [1.5.0] - 2026-10-13
+
+Sin tag publicado. Va después de 1.4.0 (PR apilado).
+
+### Agregado
+
+- `guardia-tests.yml` (fase V, ítem V2, solbeet/workflows#9): job `tests` que frena el PR que borra, debilita o saltea tests existentes o toca `tests/aceptacion/`, salvo label `tests-con-dale` puesto por una persona que no es el autor, después del último push. Comparación por árbol sintáctico en Python y por líneas en otros lenguajes. [ADR 0008](docs/decisiones/0008-guardia-de-tests.md).
+- `examples/guardia-tests.yml` y `tests/guardia/test_guardia.py` (30 casos, en `selftest / hygiene-logic`).
+
 ## [1.4.0] - 2026-10-13
 
 Sin tag publicado: se etiqueta al mergear (ver `docs/desarrollo.md`). Al publicarlo, `v1` se mueve (workflow nuevo, compatible).

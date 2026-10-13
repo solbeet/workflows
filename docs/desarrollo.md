@@ -37,6 +37,9 @@ uv run --no-project --with pyyaml==6.0.2 python tests/hygiene/test_pr_hygiene.py
 # 2b. Veredictos de gates.yml (squawk, contrato, dependencias; heredado vs nuevo)
 uv run --no-project --with pyyaml==6.0.2 python tests/gates/test_gates.py
 
+# 2c. Guardia de tests (repos git temporales; la API de GitHub se reemplaza con JSON)
+uv run --no-project --with pyyaml==6.0.2 python tests/guardia/test_guardia.py
+
 # 3. Fixture backend (los mismos comandos que el job backend)
 (cd tests/fixture/backend && uv sync --frozen && uv run --frozen ruff check . \
   && uv run --frozen ruff format --check . && uv run --frozen pyright && uv run --frozen pytest)
