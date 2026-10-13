@@ -1,0 +1,343 @@
+# Guardia de tests (fase V, ítem V2).
+#
+# Un agente que no logra pasar un test tiende a cambiar el test en vez del código
+# (ImpossibleBench, 2025: en Claude más del 79% de las trampas fueron editar tests).
+# Este check lo frena de forma determinista, sin juez LLM. Falla si el PR:
+#
+#   - borra un archivo de tests que existía;
+#   - modifica o borra un test, fixture o helper que ya existía (en Python se compara
+#     el árbol sintáctico de cada función, clase y asignación, así que reformatear o
+#     cambiar comentarios y docstrings no cuenta; en otros lenguajes, cualquier línea
+#     borrada o reemplazada de un archivo de tests existente);
+#   - agrega skip/xfail (pytest, unittest) o .only/.skip/xit (vitest, jest, mocha);
+#   - toca un archivo existente de `tests/aceptacion/` (los tests que salen de los
+#     criterios de la spec). Agregar archivos nuevos ahí sí se puede.
+#
+# Agregar tests nuevos, en archivos nuevos o existentes, siempre está permitido.
+#
+# Vía de escape: una persona revisa el cambio y pone el label `override-label`
+# (default `tests-con-dale`). Vale solo si lo puso una persona (no un bot), que no es
+# el autor del PR, y después del último push: si el PR cambia después, el label ya
+# no alcanza y hay que volver a ponerlo. Cada uso queda en el resumen del job.
+#
+# El nombre del job (`tests`) es parte del contrato (ADR 0002): cambiarlo es v2.
+name: guardia-tests
+
+on:
+  workflow_call:
+    inputs:
+      test-paths:
+        description: Patrones (fnmatch, uno por línea) de los archivos que cuentan como tests.
+        type: string
+        default: |
+          tests/*
+          */tests/*
+          test/*
+          */test/*
+          */__tests__/*
+          test_*.py
+          */test_*.py
+          *_test.py
+          conftest.py
+          */conftest.py
+          *.test.*
+          *.spec.*
+      acceptance-dir:
+        description: Directorio de los tests de aceptación (criterios de la spec). Se busca como segmento de ruta en cualquier nivel.
+        type: string
+        default: tests/aceptacion
+      override-label:
+        description: Label que pone una persona para aceptar el cambio en los tests (dale humano).
+        type: string
+        default: tests-con-dale
+      override-approvers:
+        description: Logins (separados por espacios) que pueden dar el dale. Vacío = cualquier persona que no sea el autor del PR ni un bot.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guardia-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Lectura de los eventos del PR (quién puso el label y cuándo) y de las corridas
+    # del commit (cuándo llegó el último push). No escribe nada.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::guardia-tests solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # El commit de merge y sus padres: HEAD^1 = base, HEAD^2 = punta del PR.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Cambios en tests existentes
+        env:
+          TEST_PATHS: ${{ inputs.test-paths }}
+          ACCEPTANCE_DIR: ${{ inputs.acceptance-dir }}
+        shell: python3 {0}
+        run: |
+          """Compara los tests de la base (HEAD^1) con los del PR (HEAD) y anota violaciones.
+
+          Escribe la lista en $RUNNER_TEMP/guardia.json; el paso siguiente decide si
+          alcanza con el dale humano. Este paso no falla por las violaciones.
+          """
+          import ast
+          import fnmatch
+          import json
+          import os
+          import re
+          import subprocess
+
+          patterns = [p.strip() for p in os.environ.get("TEST_PATHS", "").splitlines() if p.strip()]
+          acceptance = os.environ.get("ACCEPTANCE_DIR", "").strip().strip("/")
+
+          SKIP_PY = re.compile(
+              r"pytest\.mark\.(skip|skipif|xfail)\b|pytest\.(skip|xfail|importorskip)\s*\(|unittest\.skip"
+              r"|@skip(If|Unless)?\b|\bSkipTest\b|\.skipTest\s*\("
+          )
+          SKIP_JS = re.compile(r"\b(it|test|describe|suite)\.(only|skip|todo|fails)\b|\b(xit|xtest|xdescribe|fit|fdescribe)\s*\(")
+
+          def git(*args):
+              return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+
+          def is_test(path):
+              return any(fnmatch.fnmatch(path, p) for p in patterns)
+
+          def in_acceptance(path):
+              return bool(acceptance) and (path.startswith(acceptance + "/") or f"/{acceptance}/" in path)
+
+          def show(rev, path):
+              try:
+                  return git("show", f"{rev}:{path}")
+              except subprocess.CalledProcessError:
+                  return None
+
+          def strip_docstring(node):
+              body = getattr(node, "body", None)
+              if (
+                  isinstance(body, list) and body and isinstance(body[0], ast.Expr)
+                  and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)
+              ):
+                  node.body = body[1:] or [ast.Pass()]
+              return node
+
+          def units(src):
+              """Unidades comparables de un módulo de tests: {clave: dump del AST}."""
+              out = {}
+              tree = ast.parse(src)
+              for i, node in enumerate(tree.body):
+                  if isinstance(node, (ast.Import, ast.ImportFrom)):
+                      continue  # ordenar o sumar imports no cambia lo que prueba un test
+                  if isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant):
+                      continue  # docstring del módulo
+                  if isinstance(node, ast.ClassDef):
+                      for item in node.body:
+                          if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                              out[f"{node.name}.{item.name}"] = ast.dump(strip_docstring(item))
+                          elif not (isinstance(item, ast.Expr) and isinstance(getattr(item, "value", None), ast.Constant)):
+                              out[f"{node.name}:{ast.dump(item)}"] = ast.dump(item)
+                      header = ast.ClassDef(
+                          name=node.name, bases=node.bases, keywords=node.keywords, body=[ast.Pass()],
+                          decorator_list=node.decorator_list, type_params=getattr(node, "type_params", []),
+                      )
+                      out[f"class {node.name}"] = ast.dump(header)
+                  elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                      out[node.name] = ast.dump(strip_docstring(node))
+                  elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                      targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                      out["= " + ",".join(ast.unparse(t) for t in targets)] = ast.dump(node)
+                  else:
+                      out[f"stmt {ast.dump(node)}"] = ast.dump(node)
+              return out
+
+          violations = []
+
+          def add(path, kind, detail):
+              violations.append({"archivo": path, "tipo": kind, "detalle": detail})
+
+          def compare_python(path, old, new):
+              try:
+                  before, after = units(old), units(new)
+              except SyntaxError:
+                  return False
+              for key, dump in before.items():
+                  if key not in after:
+                      add(path, "borra", f"`{key}` existía en la base y el PR lo saca")
+                  elif after[key] != dump:
+                      add(path, "modifica", f"`{key}` cambia respecto de la base")
+              return True
+
+          def removed_lines(old_path, new_path):
+              diff = git("diff", "-U0", "--no-color", "HEAD^1", "HEAD", "--", old_path, new_path)
+              return [l[1:] for l in diff.splitlines() if l.startswith("-") and not l.startswith("---") and l[1:].strip()]
+
+          def added_lines(path):
+              diff = git("diff", "-U0", "--no-color", "HEAD^1", "HEAD", "--", path)
+              return [l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
+
+          entries = git("diff", "--name-status", "-M", "HEAD^1", "HEAD").splitlines()
+          for line in entries:
+              parts = line.split("\t")
+              status = parts[0]
+              if status.startswith("R"):
+                  old, new = parts[1], parts[2]
+              else:
+                  old = new = parts[1]
+              if not (is_test(old) or is_test(new)):
+                  continue
+              kind = status[0]
+              if kind == "D":
+                  add(old, "borra", "el PR borra un archivo de tests que existía")
+                  continue
+              if kind in "MR" and (in_acceptance(old) or in_acceptance(new)) and status != "R100":
+                  add(new, "aceptacion", "toca un test de aceptación existente (criterios de la spec)")
+              if kind in "MR" and status != "R100":
+                  before, after = show("HEAD^1", old), show("HEAD", new)
+                  if before is not None and after is not None:
+                      handled = new.endswith(".py") and compare_python(new, before, after)
+                      if not handled:
+                          gone = removed_lines(old, new)
+                          if gone:
+                              add(new, "modifica", f"borra o reemplaza {len(gone)} línea(s) existentes, la primera: `{gone[0].strip()[:120]}`")
+              if kind in "AMR":
+                  regex = SKIP_PY if new.endswith(".py") else SKIP_JS
+                  for added in added_lines(new):
+                      if regex.search(added):
+                          add(new, "saltea", f"agrega un salteo: `{added.strip()[:120]}`")
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "guardia.json"), "w") as f:
+              json.dump(violations, f, ensure_ascii=False, indent=2)
+          if violations:
+              for v in violations:
+                  print(f"::warning file={v['archivo']}::{v['tipo']}: {v['detalle']}")
+          else:
+              print("El PR no borra, modifica ni saltea tests existentes.")
+
+      - name: Dale humano para los cambios en tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OVERRIDE_LABEL: ${{ inputs.override-label }}
+          OVERRIDE_APPROVERS: ${{ inputs.override-approvers }}
+          API_URL: ${{ github.api_url }}
+        shell: python3 {0}
+        run: |
+          """Decide el check: verde si no hay violaciones o si una persona dio el dale.
+
+          El dale es el label OVERRIDE_LABEL, válido si: lo puso una persona (no un
+          bot), no es el autor del PR, está en OVERRIDE_APPROVERS (si se configuró) y
+          lo puso después de que GitHub recibió el commit actual (primera corrida de
+          Actions para HEAD_SHA). Las fechas son del servidor de GitHub, no de git.
+          """
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          temp = os.environ["RUNNER_TEMP"]
+          violations = json.load(open(os.path.join(temp, "guardia.json")))
+          summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          summary.write("## Guardia de tests\n\n")
+          if not violations:
+              summary.write("El PR no borra, modifica ni saltea tests existentes.\n")
+              sys.exit(0)
+
+          summary.write("| Archivo | Qué hace | Detalle |\n|---|---|---|\n")
+          nombres = {"borra": "borra", "modifica": "modifica", "saltea": "saltea", "aceptacion": "toca aceptación"}
+          for v in violations:
+              summary.write(f"| `{v['archivo']}` | {nombres.get(v['tipo'], v['tipo'])} | {v['detalle']} |\n")
+
+          label = os.environ["OVERRIDE_LABEL"]
+          author = os.environ["PR_AUTHOR"]
+          approvers = set(os.environ.get("OVERRIDE_APPROVERS", "").split())
+
+          def api(path):
+              # Hook de prueba: tests/guardia lo usa para no llamar a GitHub.
+              fake = os.environ.get("GUARDIA_FAKE_API")
+              if fake:
+                  with open(os.path.join(fake, path.split("?")[0].strip("/").replace("/", "_") + ".json")) as f:
+                      return json.load(f)
+              req = urllib.request.Request(
+                  f"{os.environ['API_URL']}{path}",
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+
+          def paginated(path):
+              out, page = [], 1
+              while True:
+                  sep = "&" if "?" in path else "?"
+                  chunk = api(f"{path}{sep}per_page=100&page={page}")
+                  items = chunk.get("workflow_runs", []) if isinstance(chunk, dict) else chunk
+                  out.extend(items)
+                  if len(items) < 100 or os.environ.get("GUARDIA_FAKE_API"):
+                      return out
+                  page += 1
+
+          repo, number, sha = os.environ["REPO"], os.environ["PR_NUMBER"], os.environ["HEAD_SHA"]
+          motivo = None
+          try:
+              events = paginated(f"/repos/{repo}/issues/{number}/events")
+              last = None
+              for e in events:
+                  if e.get("label", {}).get("name") != label:
+                      continue
+                  last = e if e.get("event") == "labeled" else None if e.get("event") == "unlabeled" else last
+              runs = paginated(f"/repos/{repo}/actions/runs?head_sha={sha}")
+              pushed = min((r["created_at"] for r in runs), default=None)
+          except Exception as exc:  # sin API no hay forma de validar el dale: se falla cerrado
+              last, pushed = None, None
+              motivo = f"no se pudo consultar la API de GitHub ({exc})"
+
+          ok = False
+          if motivo is None and last is None:
+              motivo = f"nadie puso el label `{label}`"
+          elif last is not None:
+              actor = last.get("actor") or {}
+              login = actor.get("login", "")
+              if actor.get("type") == "Bot" or login.endswith("[bot]"):
+                  motivo = f"el label lo puso un bot ({login})"
+              elif login == author:
+                  motivo = f"el label lo puso el autor del PR ({login}); tiene que ser otra persona"
+              elif approvers and login not in approvers:
+                  motivo = f"{login} no está entre quienes pueden dar el dale ({', '.join(sorted(approvers))})"
+              elif pushed is None or last["created_at"] < pushed:
+                  motivo = f"el label es de antes del último push ({last['created_at']}); hay que volver a ponerlo"
+              else:
+                  ok = True
+                  summary.write(f"\n**Aceptado con dale humano:** {login} puso `{label}` el {last['created_at']}.\n")
+                  print(f"::notice::Cambios en tests aceptados por {login} (label {label}).")
+
+          if not ok:
+              summary.write(
+                  f"\n**Frenado.** Este PR cambia tests que ya existían. Si el cambio es legítimo (la spec cambió, "
+                  f"el test estaba mal), una persona que no sea el autor lo revisa y pone el label `{label}`. "
+                  f"Motivo por el que no alcanza hoy: {motivo}.\n"
+              )
+              print(f"::error::El PR borra, modifica o saltea tests existentes y no tiene dale humano: {motivo}.")
+              sys.exit(1)
