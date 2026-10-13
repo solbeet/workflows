@@ -176,6 +176,53 @@ jobs:
           def add(path, kind, detail):
               violations.append({"archivo": path, "tipo": kind, "detalle": detail})
 
+          SKIP_ATTR = re.compile(
+              r"(pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail|importorskip)"
+              r"|unittest\.(skip|skipIf|skipUnless|expectedFailure|SkipTest)|.*\.skipTest)"
+          )
+          SKIP_NAMES = {"skip", "skipIf", "skipUnless", "expectedFailure", "SkipTest", "xfail", "importorskip"}
+
+          def python_skips(src, old_src):
+              """Salteos reales (decoradores, llamadas, raise) en código nuevo o cambiado.
+
+              Se mira el árbol sintáctico, no el texto: un string que dice
+              "@pytest.mark.skip" (por ejemplo en un test de esta misma guardia) no cuenta.
+              Devuelve None si el archivo no parsea (se usa la regex de líneas).
+              """
+              try:
+                  after = units(src)
+                  before = units(old_src) if old_src else {}
+                  tree = ast.parse(src)
+              except SyntaxError:
+                  return None
+              hits = []
+              changed_keys = {k for k, d in after.items() if before.get(k) != d}
+              if not changed_keys:
+                  return hits
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.Import, ast.ImportFrom)):
+                      continue
+                  text = None
+                  if isinstance(node, ast.Attribute):
+                      dotted = ast.unparse(node)
+                      if SKIP_ATTR.fullmatch(dotted):
+                          text = dotted
+                  elif isinstance(node, ast.Name) and node.id in SKIP_NAMES:
+                      text = node.id
+                  if text is None:
+                      continue
+                  # Solo cuenta si cae dentro de una unidad nueva o cambiada.
+                  line = getattr(node, "lineno", 0)
+                  for top in tree.body:
+                      start = min([d.lineno for d in getattr(top, "decorator_list", [])] + [top.lineno])
+                      if start <= line <= (top.end_lineno or top.lineno):
+                          names = [top.name] if hasattr(top, "name") else []
+                          inside = any(k == n or k.startswith(f"{n}.") or k == f"class {n}" for k in changed_keys for n in names)
+                          if inside or not names:
+                              hits.append(f"`{text}` (línea {line})")
+                          break
+              return sorted(set(hits))
+
           def compare_python(path, old, new):
               try:
                   before, after = units(old), units(new)
@@ -221,10 +268,17 @@ jobs:
                           if gone:
                               add(new, "modifica", f"borra o reemplaza {len(gone)} línea(s) existentes, la primera: `{gone[0].strip()[:120]}`")
               if kind in "AMR":
-                  regex = SKIP_PY if new.endswith(".py") else SKIP_JS
-                  for added in added_lines(new):
-                      if regex.search(added):
-                          add(new, "saltea", f"agrega un salteo: `{added.strip()[:120]}`")
+                  hits = None
+                  if new.endswith(".py"):
+                      hits = python_skips(show("HEAD", new) or "", show("HEAD^1", old) if kind != "A" else "")
+                  if hits is not None:
+                      for h in hits:
+                          add(new, "saltea", f"agrega un salteo: {h}")
+                  else:
+                      regex = SKIP_PY if new.endswith(".py") else SKIP_JS
+                      for added in added_lines(new):
+                          if regex.search(added):
+                              add(new, "saltea", f"agrega un salteo: `{added.strip()[:120]}`")
 
           with open(os.path.join(os.environ["RUNNER_TEMP"], "guardia.json"), "w") as f:
               json.dump(violations, f, ensure_ascii=False, indent=2)
