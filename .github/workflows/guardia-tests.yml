@@ -4,14 +4,20 @@
 # (ImpossibleBench, 2025: en Claude más del 79% de las trampas fueron editar tests).
 # Este check lo frena de forma determinista, sin juez LLM. Falla si el PR:
 #
-#   - borra un archivo de tests que existía;
-#   - modifica o borra un test, fixture o helper que ya existía (en Python se compara
-#     el árbol sintáctico de cada función, clase y asignación, así que reformatear o
-#     cambiar comentarios y docstrings no cuenta; en otros lenguajes, cualquier línea
-#     borrada o reemplazada de un archivo de tests existente);
-#   - agrega skip/xfail (pytest, unittest) o .only/.skip/xit (vitest, jest, mocha);
+#   - borra un archivo de tests o un test que existía;
+#   - debilita un test existente: le saca o le cambia un assert, un self.assert* o
+#     mock.assert_*, un pytest.raises/warns o un caso de @pytest.mark.parametrize
+#     (cambiar el valor esperado cuenta). Se compara el árbol sintáctico, así que
+#     reformatear o cambiar comentarios no cuenta. En otros lenguajes: borrar o
+#     reemplazar una línea con expect(/assert en un archivo de tests existente;
+#   - saltea tests existentes: skip/xfail en un test que ya estaba, a nivel módulo
+#     (pytestmark) o en conftest.py, o .only/.skip/xit en vitest, jest o mocha;
 #   - toca un archivo existente de `tests/aceptacion/` (los tests que salen de los
 #     criterios de la spec). Agregar archivos nuevos ahí sí se puede.
+#
+# Cambiar setup, fixtures o helpers de un test existente no es violación (pasa
+# seguido cuando cambia la spec y medido sobre PRs reales daba falsos positivos);
+# eso lo mira el revisor. Los salteos dentro de tests nuevos los frena rojo-verde.yml.
 #
 # Agregar tests nuevos, en archivos nuevos o existentes, siempre está permitido.
 #
@@ -101,6 +107,18 @@ jobs:
 
           Escribe la lista en $RUNNER_TEMP/guardia.json; el paso siguiente decide si
           alcanza con el dale humano. Este paso no falla por las violaciones.
+
+          Qué es una violación (Python, por árbol sintáctico):
+            borra       un test (test_* o Test*.test_*) que existía ya no está;
+            debilita    un test que existía perdió un assert, un self.assert*/mock.assert_*,
+                        un pytest.raises/warns o un caso de @pytest.mark.parametrize, o
+                        uno de esos cambió (cambiar el valor esperado cuenta);
+            saltea      un test existente gana skip/xfail, o aparece un salteo a nivel
+                        módulo o en conftest.py (afecta a tests existentes);
+            aceptacion  cambia un archivo existente de tests de aceptación.
+          Cambiar setup, fixtures, helpers o agregar asserts y tests no es violación.
+          Otros lenguajes (por líneas): borrar o reemplazar una línea con expect(/assert
+          de un archivo de tests existente, o agregar .only/.skip/xit/fit.
           """
           import ast
           import fnmatch
@@ -108,15 +126,18 @@ jobs:
           import os
           import re
           import subprocess
+          from collections import Counter
 
           patterns = [p.strip() for p in os.environ.get("TEST_PATHS", "").splitlines() if p.strip()]
           acceptance = os.environ.get("ACCEPTANCE_DIR", "").strip().strip("/")
 
-          SKIP_PY = re.compile(
-              r"pytest\.mark\.(skip|skipif|xfail)\b|pytest\.(skip|xfail|importorskip)\s*\(|unittest\.skip"
-              r"|@skip(If|Unless)?\b|\bSkipTest\b|\.skipTest\s*\("
-          )
           SKIP_JS = re.compile(r"\b(it|test|describe|suite)\.(only|skip|todo|fails)\b|\b(xit|xtest|xdescribe|fit|fdescribe)\s*\(")
+          ASSERT_JS = re.compile(r"\bexpect\s*\(|\bassert\b|\.should\b|toMatchSnapshot|toThrow")
+          SKIP_ATTR = re.compile(
+              r"(pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail|importorskip)"
+              r"|unittest\.(skip|skipIf|skipUnless|expectedFailure|SkipTest)|.*\.skipTest)"
+          )
+          SKIP_NAMES = {"skip", "skipIf", "skipUnless", "expectedFailure", "SkipTest", "xfail", "importorskip"}
 
           def git(*args):
               return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
@@ -133,42 +154,50 @@ jobs:
               except subprocess.CalledProcessError:
                   return None
 
-          def strip_docstring(node):
-              body = getattr(node, "body", None)
-              if (
-                  isinstance(body, list) and body and isinstance(body[0], ast.Expr)
-                  and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)
-              ):
-                  node.body = body[1:] or [ast.Pass()]
-              return node
+          def short(node):
+              return ast.unparse(node).replace("\n", " ")[:120]
 
-          def units(src):
-              """Unidades comparables de un módulo de tests: {clave: dump del AST}."""
+          def skips_in(node):
+              """Salteos reales (atributos, nombres) dentro de un nodo; los strings no cuentan."""
+              out = []
+              for n in ast.walk(node):
+                  if isinstance(n, ast.Attribute) and SKIP_ATTR.fullmatch(ast.unparse(n)):
+                      out.append(ast.unparse(n))
+                  elif isinstance(n, ast.Name) and n.id in SKIP_NAMES:
+                      out.append(n.id)
+              return out
+
+          def profile(fn):
+              """Lo que un test verifica: asserts, aserciones por llamada, raises y casos."""
+              checks = Counter()
+              for n in ast.walk(fn):
+                  if isinstance(n, ast.Assert):
+                      checks[short(n)] += 1
+                  elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr.startswith("assert"):
+                      checks[short(n)] += 1
+                  elif isinstance(n, (ast.With, ast.AsyncWith)):
+                      for item in n.items:
+                          expr = ast.unparse(item.context_expr)
+                          if re.search(r"\b(raises|warns|assertRaises\w*|assertWarns\w*)\s*\(", expr):
+                              checks[f"with {short(item.context_expr)}"] += 1
+              for dec in getattr(fn, "decorator_list", []):
+                  if isinstance(dec, ast.Call) and ast.unparse(dec.func).endswith("mark.parametrize") and len(dec.args) >= 2:
+                      values = dec.args[1]
+                      if isinstance(values, (ast.List, ast.Tuple)):
+                          for elt in values.elts:
+                              checks[f"caso {short(elt)}"] += 1
+              return checks
+
+          def tests_of(tree):
+              """{nombre: FunctionDef} de tests (funciones test* y métodos test* de Test*)."""
               out = {}
-              tree = ast.parse(src)
-              for i, node in enumerate(tree.body):
-                  if isinstance(node, (ast.Import, ast.ImportFrom)):
-                      continue  # ordenar o sumar imports no cambia lo que prueba un test
-                  if isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant):
-                      continue  # docstring del módulo
-                  if isinstance(node, ast.ClassDef):
+              for node in tree.body:
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                      out[node.name] = node
+                  elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
                       for item in node.body:
-                          if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                              out[f"{node.name}.{item.name}"] = ast.dump(strip_docstring(item))
-                          elif not (isinstance(item, ast.Expr) and isinstance(getattr(item, "value", None), ast.Constant)):
-                              out[f"{node.name}:{ast.dump(item)}"] = ast.dump(item)
-                      header = ast.ClassDef(
-                          name=node.name, bases=node.bases, keywords=node.keywords, body=[ast.Pass()],
-                          decorator_list=node.decorator_list, type_params=getattr(node, "type_params", []),
-                      )
-                      out[f"class {node.name}"] = ast.dump(header)
-                  elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                      out[node.name] = ast.dump(strip_docstring(node))
-                  elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-                      targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                      out["= " + ",".join(ast.unparse(t) for t in targets)] = ast.dump(node)
-                  else:
-                      out[f"stmt {ast.dump(node)}"] = ast.dump(node)
+                          if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test"):
+                              out[f"{node.name}.{item.name}"] = item
               return out
 
           violations = []
@@ -176,109 +205,70 @@ jobs:
           def add(path, kind, detail):
               violations.append({"archivo": path, "tipo": kind, "detalle": detail})
 
-          SKIP_ATTR = re.compile(
-              r"(pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail|importorskip)"
-              r"|unittest\.(skip|skipIf|skipUnless|expectedFailure|SkipTest)|.*\.skipTest)"
-          )
-          SKIP_NAMES = {"skip", "skipIf", "skipUnless", "expectedFailure", "SkipTest", "xfail", "importorskip"}
-
-          def python_skips(src, old_src):
-              """Salteos reales (decoradores, llamadas, raise) en código nuevo o cambiado.
-
-              Se mira el árbol sintáctico, no el texto: un string que dice
-              "@pytest.mark.skip" (por ejemplo en un test de esta misma guardia) no cuenta.
-              Devuelve None si el archivo no parsea (se usa la regex de líneas).
-              """
+          def compare_python(path, old, new, is_new_file):
+              """Devuelve False si algún lado no parsea (se usa el criterio por líneas)."""
               try:
-                  after = units(src)
-                  before = units(old_src) if old_src else {}
-                  tree = ast.parse(src)
-              except SyntaxError:
-                  return None
-              hits = []
-              changed_keys = {k for k, d in after.items() if before.get(k) != d}
-              if not changed_keys:
-                  return hits
-              for node in ast.walk(tree):
-                  if isinstance(node, (ast.Import, ast.ImportFrom)):
-                      continue
-                  text = None
-                  if isinstance(node, ast.Attribute):
-                      dotted = ast.unparse(node)
-                      if SKIP_ATTR.fullmatch(dotted):
-                          text = dotted
-                  elif isinstance(node, ast.Name) and node.id in SKIP_NAMES:
-                      text = node.id
-                  if text is None:
-                      continue
-                  # Solo cuenta si cae dentro de una unidad nueva o cambiada.
-                  line = getattr(node, "lineno", 0)
-                  for top in tree.body:
-                      start = min([d.lineno for d in getattr(top, "decorator_list", [])] + [top.lineno])
-                      if start <= line <= (top.end_lineno or top.lineno):
-                          names = [top.name] if hasattr(top, "name") else []
-                          inside = any(k == n or k.startswith(f"{n}.") or k == f"class {n}" for k in changed_keys for n in names)
-                          if inside or not names:
-                              hits.append(f"`{text}` (línea {line})")
-                          break
-              return sorted(set(hits))
-
-          def compare_python(path, old, new):
-              try:
-                  before, after = units(old), units(new)
+                  t_new = ast.parse(new)
+                  t_old = ast.parse(old) if old else ast.parse("")
               except SyntaxError:
                   return False
-              for key, dump in before.items():
-                  if key not in after:
-                      add(path, "borra", f"`{key}` existía en la base y el PR lo saca")
-                  elif after[key] != dump:
-                      add(path, "modifica", f"`{key}` cambia respecto de la base")
+              before, after = tests_of(t_old), tests_of(t_new)
+              for name, fn in before.items():
+                  if name not in after:
+                      add(path, "borra", f"`{name}` existía en la base y el PR lo saca")
+                      continue
+                  lost = profile(fn) - profile(after[name])
+                  for check in lost:
+                      add(path, "debilita", f"`{name}` pierde o cambia `{check}`")
+                  new_skips = Counter(skips_in(after[name])) - Counter(skips_in(fn))
+                  for s in new_skips:
+                      add(path, "saltea", f"`{name}` (existente) ahora usa `{s}`")
+              # Salteos fuera de los tests: a nivel módulo (pytestmark) o en conftest.py.
+              conftest = os.path.basename(path) == "conftest.py"
+              old_dumps = Counter(ast.dump(n) for n in t_old.body)
+              for node in t_new.body:
+                  if isinstance(node, (ast.Import, ast.ImportFrom)) or old_dumps[ast.dump(node)] > 0:
+                      continue
+                  is_test_def = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
+                      node.name.startswith("test") or node.name.startswith("Test"))
+                  if is_test_def or (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and not conftest):
+                      continue  # tests nuevos y helpers: los salteos de tests nuevos los ve rojo-verde
+                  if is_new_file and not conftest:
+                      continue  # pytestmark en un archivo nuevo solo afecta a tests nuevos
+                  for s in skips_in(node):
+                      add(path, "saltea", f"agrega `{s}` fuera de un test (línea {node.lineno}): afecta a tests existentes")
               return True
 
-          def removed_lines(old_path, new_path):
+          def diff_lines(old_path, new_path, sign):
               diff = git("diff", "-U0", "--no-color", "HEAD^1", "HEAD", "--", old_path, new_path)
-              return [l[1:] for l in diff.splitlines() if l.startswith("-") and not l.startswith("---") and l[1:].strip()]
+              head = "---" if sign == "-" else "+++"
+              return [l[1:] for l in diff.splitlines() if l.startswith(sign) and not l.startswith(head)]
 
-          def added_lines(path):
-              diff = git("diff", "-U0", "--no-color", "HEAD^1", "HEAD", "--", path)
-              return [l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
-
-          entries = git("diff", "--name-status", "-M", "HEAD^1", "HEAD").splitlines()
-          for line in entries:
+          for line in git("diff", "--name-status", "-M", "HEAD^1", "HEAD").splitlines():
               parts = line.split("\t")
               status = parts[0]
-              if status.startswith("R"):
-                  old, new = parts[1], parts[2]
-              else:
-                  old = new = parts[1]
+              old, new = (parts[1], parts[2]) if status.startswith("R") else (parts[1], parts[1])
               if not (is_test(old) or is_test(new)):
                   continue
               kind = status[0]
               if kind == "D":
                   add(old, "borra", "el PR borra un archivo de tests que existía")
                   continue
-              if kind in "MR" and (in_acceptance(old) or in_acceptance(new)) and status != "R100":
-                  add(new, "aceptacion", "toca un test de aceptación existente (criterios de la spec)")
-              if kind in "MR" and status != "R100":
-                  before, after = show("HEAD^1", old), show("HEAD", new)
-                  if before is not None and after is not None:
-                      handled = new.endswith(".py") and compare_python(new, before, after)
-                      if not handled:
-                          gone = removed_lines(old, new)
-                          if gone:
-                              add(new, "modifica", f"borra o reemplaza {len(gone)} línea(s) existentes, la primera: `{gone[0].strip()[:120]}`")
-              if kind in "AMR":
-                  hits = None
-                  if new.endswith(".py"):
-                      hits = python_skips(show("HEAD", new) or "", show("HEAD^1", old) if kind != "A" else "")
-                  if hits is not None:
-                      for h in hits:
-                          add(new, "saltea", f"agrega un salteo: {h}")
-                  else:
-                      regex = SKIP_PY if new.endswith(".py") else SKIP_JS
-                      for added in added_lines(new):
-                          if regex.search(added):
-                              add(new, "saltea", f"agrega un salteo: `{added.strip()[:120]}`")
+              if status == "R100":
+                  continue  # mover sin cambios
+              if kind in "MR" and (in_acceptance(old) or in_acceptance(new)):
+                  add(new, "aceptacion", "cambia un test de aceptación existente (criterios de la spec)")
+              before = show("HEAD^1", old) if kind in "MR" else ""
+              after = show("HEAD", new) or ""
+              if new.endswith(".py") and compare_python(new, before or "", after, kind == "A"):
+                  continue
+              if kind in "MR":
+                  gone = [l for l in diff_lines(old, new, "-") if ASSERT_JS.search(l)]
+                  if gone:
+                      add(new, "debilita", f"borra o reemplaza {len(gone)} línea(s) con verificaciones, la primera: `{gone[0].strip()[:120]}`")
+              for added in diff_lines(old, new, "+"):
+                  if SKIP_JS.search(added):
+                      add(new, "saltea", f"agrega `{added.strip()[:120]}`")
 
           with open(os.path.join(os.environ["RUNNER_TEMP"], "guardia.json"), "w") as f:
               json.dump(violations, f, ensure_ascii=False, indent=2)
@@ -286,7 +276,7 @@ jobs:
               for v in violations:
                   print(f"::warning file={v['archivo']}::{v['tipo']}: {v['detalle']}")
           else:
-              print("El PR no borra, modifica ni saltea tests existentes.")
+              print("El PR no borra, debilita ni saltea tests existentes.")
 
       - name: Dale humano para los cambios en tests
         env:
@@ -317,11 +307,11 @@ jobs:
           summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
           summary.write("## Guardia de tests\n\n")
           if not violations:
-              summary.write("El PR no borra, modifica ni saltea tests existentes.\n")
+              summary.write("El PR no borra, debilita ni saltea tests existentes.\n")
               sys.exit(0)
 
           summary.write("| Archivo | Qué hace | Detalle |\n|---|---|---|\n")
-          nombres = {"borra": "borra", "modifica": "modifica", "saltea": "saltea", "aceptacion": "toca aceptación"}
+          nombres = {"borra": "borra", "debilita": "debilita", "saltea": "saltea", "aceptacion": "toca aceptación"}
           for v in violations:
               summary.write(f"| `{v['archivo']}` | {nombres.get(v['tipo'], v['tipo'])} | {v['detalle']} |\n")
 
@@ -389,9 +379,9 @@ jobs:
 
           if not ok:
               summary.write(
-                  f"\n**Frenado.** Este PR cambia tests que ya existían. Si el cambio es legítimo (la spec cambió, "
+                  f"\n**Frenado.** Este PR borra, debilita o saltea tests que ya existían. Si el cambio es legítimo (la spec cambió, "
                   f"el test estaba mal), una persona que no sea el autor lo revisa y pone el label `{label}`. "
                   f"Motivo por el que no alcanza hoy: {motivo}.\n"
               )
-              print(f"::error::El PR borra, modifica o saltea tests existentes y no tiene dale humano: {motivo}.")
+              print(f"::error::El PR borra, debilita o saltea tests existentes y no tiene dale humano: {motivo}.")
               sys.exit(1)

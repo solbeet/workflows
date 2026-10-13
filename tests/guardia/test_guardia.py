@@ -40,6 +40,10 @@ BASE = {
         "        assert suma(0, 0) == 0\n"
     ),
     "backend/tests/aceptacion/test_criterio_1.py": "def test_criterio_1():\n    assert True is True\n",
+    "backend/tests/test_param.py": (
+        "import pytest\n\n\n@pytest.mark.parametrize((\"a\", \"b\"), [(1, 2), (2, 4), (3, 6)])\n"
+        "def test_doble(a, b):\n    assert a * 2 == b\n"
+    ),
     "frontend/src/App.test.tsx": "it('muestra el título', () => {\n  expect(1).toBe(1);\n});\n",
 }
 
@@ -106,6 +110,9 @@ def labeled(login: str, when: str, kind: str = "User", event: str = "labeled") -
     return {"event": event, "label": {"name": "tests-con-dale"}, "actor": {"login": login, "type": kind}, "created_at": when}
 
 
+BASE_PARAM = BASE["backend/tests/test_param.py"]
+
+
 def cases() -> list[Case]:
     """Casos que deben pasar y casos que deben fallar."""
     t = BASE["backend/tests/test_calc.py"]
@@ -119,18 +126,23 @@ def cases() -> list[Case]:
         Case("test de aceptación nuevo", {"backend/tests/aceptacion/test_criterio_2.py": "def test_criterio_2():\n    assert 2 == 2\n"}, True),
         Case("mover un archivo de tests sin cambios", {}, True, renames={"backend/tests/test_calc.py": "backend/tests/unit/test_calc.py"}),
         Case("borra un archivo de tests", {"backend/tests/test_calc.py": None}, False, "borra"),
-        Case("debilita un assert", {"backend/tests/test_calc.py": t.replace("assert suma(2, 3) == 5", "assert suma(2, 3)")}, False, "`test_suma` cambia"),
-        Case("cambia el valor esperado", {"backend/tests/test_calc.py": t.replace("== 5", "== 6")}, False, "`test_suma` cambia"),
+        Case("debilita un assert", {"backend/tests/test_calc.py": t.replace("assert suma(2, 3) == 5", "assert suma(2, 3)")}, False, "`test_suma` pierde o cambia"),
+        Case("cambia el valor esperado", {"backend/tests/test_calc.py": t.replace("== 5", "== 6")}, False, "`test_suma` pierde o cambia"),
         Case("borra un test de una clase", {"backend/tests/test_calc.py": t.split("class TestBorde")[0] + "class TestBorde:\n    pass\n"}, False, "TestBorde.test_cero"),
         Case("skip en un test existente", {"backend/tests/test_calc.py": t.replace("def test_suma():", "@pytest.mark.skip\ndef test_suma():")}, False, "saltea"),
-        Case("xfail en un test nuevo", {"backend/tests/test_nuevo.py": "import pytest\n\n\n@pytest.mark.xfail\ndef test_x():\n    assert False\n"}, False, "saltea"),
-        Case("pytest.skip dentro de un test nuevo", {"backend/tests/test_nuevo.py": "import pytest\n\n\ndef test_x():\n    pytest.skip('después')\n"}, False, "saltea"),
+        Case("xfail en un test nuevo lo deja a rojo-verde", {"backend/tests/test_nuevo.py": "import pytest\n\n\n@pytest.mark.xfail\ndef test_x():\n    assert False\n"}, True),
+        Case("skip a nivel módulo en archivo existente", {"backend/tests/test_calc.py": t.replace("from app.calc import suma\n", "from app.calc import suma\n\npytestmark = pytest.mark.skip\n")}, False, "fuera de un test"),
+        Case("skip en conftest", {"backend/tests/conftest.py": "import pytest\n\n\ndef pytest_collection_modifyitems(items):\n    for i in items:\n        i.add_marker(pytest.mark.skip)\n"}, False, "fuera de un test"),
+        Case("cambia setup sin tocar asserts", {"backend/tests/test_calc.py": t.replace("    assert suma(2, 3) == 5", "    x = 1\n    assert suma(2, 3) == 5")}, True),
+        Case("saca un caso de parametrize", {"backend/tests/test_param.py": BASE_PARAM.replace(", (3, 6)", "")}, False, "caso (3, 6)"),
+        Case("agrega un caso de parametrize", {"backend/tests/test_param.py": BASE_PARAM.replace("(3, 6)]", "(3, 6), (4, 8)]")}, True),
+        Case("agrega assert a test existente", {"backend/tests/test_calc.py": t.replace("assert suma(2, 3) == 5", "assert suma(2, 3) == 5\n    assert suma(1, 1) == 2")}, True),
+        Case("cambia assertEqual de unittest", {"backend/tests/test_calc.py": t + "\n\nclass TestU:\n    def test_u(self):\n        self.assertEqual(1, 1)\n"}, True),
         Case("toca un test de aceptación existente", {"backend/tests/aceptacion/test_criterio_1.py": BASE["backend/tests/aceptacion/test_criterio_1.py"] + "\n\ndef test_extra():\n    assert True\n"}, False, "aceptación"),
         Case("strings que mencionan skip no cuentan", {"backend/tests/test_textos.py": 'def test_texto():\n    assert "@pytest.mark.skip" in "x @pytest.mark.skip"\n'}, True),
-        Case("pytestmark a nivel módulo saltea", {"backend/tests/test_mod.py": "import pytest\n\npytestmark = pytest.mark.skip(reason='x')\n\n\ndef test_a():\n    assert 1\n"}, False, "saltea"),
-        Case("from unittest import skip y decorador", {"backend/tests/test_u.py": "from unittest import skip\n\n\n@skip('x')\ndef test_a():\n    assert 1\n"}, False, "saltea"),
+        Case("skip en test existente vía decorador importado", {"backend/tests/test_calc.py": t.replace("import pytest\n", "import pytest\nfrom unittest import skip\n").replace("def test_suma():", "@skip('x')\ndef test_suma():")}, False, "saltea"),
         Case(".only en vitest", {"frontend/src/Nuevo.test.tsx": "it.only('x', () => {});\n"}, False, "saltea"),
-        Case("cambia una línea de un test de vitest", {"frontend/src/App.test.tsx": BASE["frontend/src/App.test.tsx"].replace("toBe(1)", "toBeTruthy()")}, False, "reemplaza 1 línea"),
+        Case("cambia una línea de un test de vitest", {"frontend/src/App.test.tsx": BASE["frontend/src/App.test.tsx"].replace("toBe(1)", "toBeTruthy()")}, False, "con verificaciones"),
         Case("test de vitest nuevo al final", {"frontend/src/App.test.tsx": BASE["frontend/src/App.test.tsx"] + "\nit('otro', () => {\n  expect(2).toBe(2);\n});\n"}, True),
         Case("con dale de una persona después del push", {"backend/tests/test_calc.py": None}, True, "Aceptados por santiago",
              label_events=[labeled("santiago", "2026-10-13T11:00:00Z")]),
