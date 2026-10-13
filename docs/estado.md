@@ -1,6 +1,26 @@
 # Estado
 
-Última actualización: 2026-10-11 · Versión: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
+Última actualización: 2026-10-13 · Sin publicar: v1.4.0 (`gates.yml`, fase V ítem V1; ver «v1.4.0» abajo). Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
+
+## v1.4.0 (sin publicar): `gates.yml`
+
+Verificado en GitHub Actions, no solo local:
+
+| Qué | Cómo | Resultado |
+|---|---|---|
+| Los cuatro jobs contra el fixture | `selftest / gates` en el PR #12 (llama a `gates.yml` por ruta local, `contract-app: app.main:app`) | verdes; `migraciones` saltea con aviso (el fixture no usa Alembic) |
+| Veredictos (heredado vs nuevo) de squawk, contrato y dependencias | `tests/gates/test_gates.py` en `selftest / hygiene-logic` | 12/12 casos |
+| Cobertura del cambio baja | `solbeet-pruebas/app-prueba#9`: función nueva sin test | `solbeet / cobertura-cambio` en rojo (25% de las líneas cambiadas), el resto verde |
+| Migración con `DROP COLUMN` | `app-prueba#10` | `solbeet / migraciones` en rojo: squawk `ban-drop-column` y pytest-alembic `test_model_definitions_match_ddl` nuevo |
+| Secreto en el diff | `app-prueba#11` (token falso con formato de GitHub) | `pr-hygiene / secret-scan` en rojo; los cuatro gates verdes |
+| Dependencia vulnerable | `app-prueba#14` (`urllib3==1.26.4`) | `solbeet / dependencias` en rojo con 8 vulnerabilidades altas con arreglo; las 4 heredadas del frontend, aviso |
+| Contrato roto | `app-prueba#13`: endpoint que da 500 fuera del caso feliz | `solbeet / contrato` en rojo solo por `GET /api/version/{parte}`; los 500 heredados de `items` como aviso |
+| Contraprueba | `app-prueba#12` y `#17`: endpoint nuevo con su test | todo verde |
+
+Hallazgos en el camino:
+
+- `app-prueba` (y por lo tanto la plantilla) tiene errores de contrato heredados: `PATCH /api/items/{id}` con `name: null`, `GET /api/items` con `offset` negativo y otros dan 500. Quedan como aviso en cada PR; conviene arreglarlos en la plantilla.
+- La generación de Schemathesis no es igual entre corridas aunque se pida determinista: hizo falta reenviar a la base las peticiones que fallan en el PR (ADR 0007).
 
 ## Qué funciona y cómo se verificó
 

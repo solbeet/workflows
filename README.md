@@ -16,6 +16,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`claude-review.yml`](.github/workflows/claude-review.yml) | Revisor independiente de PRs con `anthropics/claude-code-action`: spec, tests, bugs y seguridad, evidencia. Deja comentarios inline y un resumen con veredicto | `review` |
 | [`pr-hygiene.yml`](.github/workflows/pr-hygiene.yml) | Secciones de evidencia en el cuerpo del PR, aviso por diff grande, archivos `.rej`, marcadores de conflicto y escaneo de secretos con gitleaks | `hygiene`, `secret-scan` |
 | [`imagen.yml`](.github/workflows/imagen.yml) | Construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` con tag = versión semver sin `v` y `sha-<sha7>` (sin `latest`); el sha completo va como label y anotación `org.opencontainers.image.revision` (outputs `tag` y `revision`). Usa el `GITHUB_TOKEN` con `packages: write` | `imagen` (no es check requerido) |
+| [`gates.yml`](.github/workflows/gates.yml) | Gates sobre el diff del PR (fase V): cobertura de las líneas cambiadas, migraciones (pytest-alembic + squawk), contrato de la API (Schemathesis) y dependencias vulnerables (OSV-Scanner). Solo frena lo que introduce el PR | `cobertura-cambio`, `migraciones`, `contrato`, `dependencias` |
 | [`selftest.yml`](.github/workflows/selftest.yml) | Uso interno: lintea los workflows y los ejecuta contra el fixture de `tests/fixture/` | — |
 
 ## Requisitos (repo cliente)
@@ -128,6 +129,36 @@ Qué falla y qué avisa:
 
 El escaneo de secretos revisa cada commit del PR (no solo el estado final), con gitleaks 8.30.1 descargado y verificado por checksum ([ADR 0003](docs/decisiones/0003-escaner-de-secretos-y-versiones-fijadas.md)). Si el repo cliente tiene `.gitleaks.toml` o `.gitleaksignore` en la raíz, gitleaks los usa (para falsos positivos).
 
+### `gates.yml`
+
+Cuatro checks pensados para ser requeridos antes de prender el merge automático (ADR 0004 §13 de la fábrica: "checks requeridos en verde"). **Regla común: solo frenan lo que introduce el PR.** Cada job compara contra la rama base (`HEAD^1` del commit de merge de `pull_request`): lo que ya fallaba en la base se informa como aviso. Así sirven en código heredado sin tests. Solo funciona con el evento `pull_request` ([ADR 0007](docs/decisiones/0007-gates-sobre-el-diff.md)).
+
+| Input | Tipo | Default | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `backend-dir` | string | `backend` | no | Directorio con `pyproject.toml` y `uv.lock`. |
+| `python-version` | string | `""` | no | Igual que en `python-react.yml`. |
+| `postgres` | boolean | `false` | no | Postgres para los tests de `cobertura-cambio` (exporta `DATABASE_URL`). `migraciones` y `contrato` lo levantan siempre. |
+| `postgres-image` | string | `postgres:17` | no | Imagen del servicio Postgres. |
+| `coverage-min` | number | `80` | no | Porcentaje mínimo de líneas cambiadas cubiertas. |
+| `coverage-omit` | string | `tests/*,migrations/*` | no | Patrones (coma) que no se miden, relativos a `backend-dir`. |
+| `migrations-blocking-rules` | string | `ban-drop-column ban-drop-table ban-drop-database ban-truncate-cascade renaming-column renaming-table changing-column-type adding-required-field` | no | Reglas de squawk que frenan; el resto avisa. |
+| `contract-app` | string | `""` | no | App ASGI (`modulo:objeto`) que levanta el job `contrato`. Vacío = no corre. |
+| `contract-factory` | boolean | `false` | no | `contract-app` es una fábrica (`uvicorn --factory`). |
+| `contract-max-examples` | number | `30` | no | Casos por operación en Schemathesis. |
+| `contract-checks` | string | `not_a_server_error,response_schema_conformance,content_type_conformance` | no | Checks de Schemathesis. |
+| `vuln-min-severity` | number | `7` | no | CVSS desde el que una vulnerabilidad nueva con arreglo frena. |
+
+Secretos: ninguno. Permisos: `contents: read`. Output del job `migraciones`: `destructiva` (`true` si una migración nueva tiene una operación de las reglas que frenan; señal para clasificar el PR como zona alta).
+
+| Job | Qué hace | Frena si | Avisa (no frena) |
+|---|---|---|---|
+| `cobertura-cambio` | `coverage run -m pytest` en `backend-dir` y `diff-cover` contra `HEAD^1` | menos de `coverage-min`% de las líneas Python cambiadas están cubiertas | pytest falla (eso lo frena `ci / backend`) |
+| `migraciones` | si hay `alembic.ini`: SQL offline de cada revisión nueva + squawk; pytest-alembic (`single_head_revision`, `upgrade`, `up_down_consistency`, `model_definitions_match_ddl`) contra Postgres | una migración nueva borra, renombra o cambia el tipo de algo existente; una prueba de pytest-alembic falla con el PR y pasaba en la base | locks largos, timeouts, estilo; pruebas que ya fallaban en la base |
+| `contrato` | levanta la base y el PR en el runner (Postgres + `alembic upgrade head` + uvicorn) y corre Schemathesis sobre los dos | un fallo de contrato (5xx, respuesta fuera del esquema) que no está en la base | fallos heredados; antes de declarar uno nuevo se reenvía a la base la misma petición y se insiste en esa operación |
+| `dependencias` | OSV-Scanner sobre los lockfiles del PR y de la base | una vulnerabilidad nueva con CVSS ≥ `vuln-min-severity` y versión arreglada | nuevas sin arreglo o de menor severidad; heredadas |
+
+Herramientas fijadas: squawk 2.66.0 y OSV-Scanner 2.6.0 (binarios con SHA-256), coverage 7.16.2, diff-cover 10.6.0, pytest-alembic 0.13.0, Schemathesis 4.28.0, uvicorn 0.53.0 (por PyPI, versión exacta). El cliente no tiene que declararlas en sus dependencias.
+
 ## Checks requeridos
 
 Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que llama> / <job del reutilizable>`. Con los ejemplos de `examples/` quedan:
@@ -138,6 +169,7 @@ Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que lla
 | `ci / frontend` | sí (si se saltea porque `frontend-dir` está vacío, GitHub lo cuenta como aprobado) |
 | `pr-hygiene / hygiene` | sí |
 | `pr-hygiene / secret-scan` | sí |
+| `solbeet / cobertura-cambio`, `solbeet / migraciones`, `solbeet / contrato`, `solbeet / dependencias` | sí, antes de prender el merge automático (con `examples/gates.yml`, cuyo job se llama `solbeet`) |
 | `claude-review / review` | **no**: es informativo. Depende de un servicio externo y de secretos que los forks no reciben |
 
 Si el repo cliente le pone otro id (o `name:`) al job que llama, la primera parte del nombre cambia. Los nombres de los jobs de este repo (`backend`, `frontend`, `review`, `hygiene`, `secret-scan`) son parte del contrato y solo cambian en una versión mayor.

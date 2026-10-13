@@ -28,6 +28,9 @@ Se usa el **binario de gitleaks** descargado del release oficial de GitHub, con 
 | astral-sh/setup-uv | v10.2.0 | SHA del commit del tag | `python-react.yml`, `selftest.yml` |
 | anthropics/claude-code-action | v1.0.245 | SHA del commit del tag | `claude-review.yml` |
 | pyyaml (tests de hygiene) | 6.0.2 | `--with pyyaml==6.0.2` | `selftest.yml`, docs |
+| squawk | 2.66.0 | versión + SHA-256 (linux x64 y arm64, digest del asset en la API de GitHub) | `gates.yml` (`env`) |
+| OSV-Scanner | 2.6.0 | versión + SHA-256 (linux amd64 y arm64, `osv-scanner_SHA256SUMS`) | `gates.yml` (`env`) |
+| coverage, diff-cover, pytest-alembic, greenlet, Schemathesis, uvicorn | 7.16.2, 10.6.0, 0.13.0, 3.5.6, 4.28.0, 0.53.0 | versión exacta de PyPI (`VERSION_<X>`) | `gates.yml` (`env`) |
 
 Eran las últimas versiones estables publicadas al 2026-10-08 (gitleaks 8.30.1 es de marzo de 2026, actionlint 1.7.12 de marzo de 2026), con más de dos semanas de publicadas.
 

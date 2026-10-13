@@ -1,0 +1,913 @@
+# Gates de verificación sobre el diff del PR (fase V, ítem V1).
+#
+# Cuatro jobs, cada uno es un check requerido candidato para el merge
+# automático (ADR 0004 §13.1 de la fábrica: "checks requeridos en verde"):
+#
+#   cobertura-cambio  las líneas Python que agrega o cambia el PR están cubiertas
+#                     por tests (diff-cover, umbral `coverage-min`).
+#   migraciones       las migraciones de Alembic aplican, bajan y coinciden con los
+#                     modelos (pytest-alembic), y las nuevas no tienen operaciones
+#                     destructivas o de lock largo (squawk sobre el SQL generado).
+#   contrato          la API responde lo que dice su OpenAPI (Schemathesis contra la
+#                     app levantada dentro del runner, con Postgres de prueba).
+#   dependencias      el PR no agrega dependencias con vulnerabilidades altas o
+#                     críticas que ya tengan arreglo (OSV-Scanner sobre los lockfiles).
+#
+# Regla común: **solo frena lo que introduce el PR**. Cada job compara contra la
+# rama base (HEAD^1 del commit de merge de pull_request): lo que ya fallaba en la
+# base se informa como aviso y no bloquea. Así los gates sirven en código heredado
+# sin tests (proyectos que adoptan el método sobre un producto existente).
+#
+# Los secretos en el diff ya los frena `pr-hygiene / secret-scan` (gitleaks).
+# Los nombres de los jobs son parte del contrato (ADR 0002): cambiarlos es v2.
+name: gates
+
+on:
+  workflow_call:
+    inputs:
+      backend-dir:
+        description: Directorio del backend (contiene pyproject.toml y uv.lock).
+        type: string
+        default: backend
+      python-version:
+        description: Versión de Python. Vacío = .python-version del backend, luego el de la raíz, luego 3.12.
+        type: string
+        default: ""
+      postgres:
+        description: Levantar Postgres para los tests del job cobertura-cambio y exportar DATABASE_URL (migraciones y contrato lo levantan siempre).
+        type: boolean
+        default: false
+      postgres-image:
+        description: Imagen del servicio Postgres.
+        type: string
+        default: postgres:17
+      coverage-min:
+        description: Porcentaje mínimo de líneas cambiadas cubiertas por tests.
+        type: number
+        default: 80
+      coverage-omit:
+        description: Patrones (coma) que no se miden en la cobertura, relativos a backend-dir (se anclan a ese directorio).
+        type: string
+        default: "tests/*,migrations/*"
+      migrations-blocking-rules:
+        description: Reglas de squawk que frenan el PR (separadas por espacios). Las demás se informan como aviso.
+        type: string
+        default: >-
+          ban-drop-column ban-drop-table ban-drop-database ban-truncate-cascade
+          renaming-column renaming-table changing-column-type adding-required-field
+      contract-app:
+        description: App ASGI a levantar para el contrato, en formato modulo:objeto (por ejemplo app.main:create_app). Vacío = el job contrato no corre.
+        type: string
+        default: ""
+      contract-factory:
+        description: contract-app es una fábrica (uvicorn --factory).
+        type: boolean
+        default: false
+      contract-max-examples:
+        description: Casos generados por operación en Schemathesis.
+        type: number
+        default: 30
+      contract-checks:
+        description: Checks de Schemathesis (coma).
+        type: string
+        default: not_a_server_error,response_schema_conformance,content_type_conformance
+      vuln-min-severity:
+        description: Puntaje CVSS a partir del cual una vulnerabilidad nueva con arreglo disponible frena el PR.
+        type: number
+        default: 7
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.backend-dir }}
+  cancel-in-progress: true
+
+env:
+  # Versiones fijadas. Binarios: checksum SHA-256 del release oficial (squawk
+  # publica el digest de cada asset en la API de GitHub; OSV-Scanner publica
+  # osv-scanner_SHA256SUMS). Ver docs/decisiones/0007-gates-sobre-el-diff.md.
+  SQUAWK_VERSION: 2.66.0
+  SQUAWK_SHA256_LINUX_X64: e7965f8146b53cfa7a4625ceecfea5c6aeb35add39132210aa60b11ae180b9f4
+  SQUAWK_SHA256_LINUX_ARM64: 04455267bb895de1568dc24e52eb062b311096ad614c3e15a77cf8a7b3483c2a
+  OSV_SCANNER_VERSION: 2.6.0
+  OSV_SCANNER_SHA256_LINUX_X64: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+  OSV_SCANNER_SHA256_LINUX_ARM64: 2c71403eb443d05891c4f268c3ad771cf4f16e5443463fd7851ef8f454d3c7e4
+  # Las versiones de herramientas Python van como VERSION_<X> y no <X>_VERSION:
+  # uvicorn y schemathesis leen variables con su prefijo como opciones de la CLI
+  # (UVICORN_VERSION se toma como --version).
+  VERSION_COVERAGE: 7.16.2
+  VERSION_DIFF_COVER: 10.6.0
+  VERSION_PYTEST_ALEMBIC: 0.13.0
+  VERSION_GREENLET: 3.5.6
+  VERSION_SCHEMATHESIS: 4.28.0
+  VERSION_UVICORN: 0.53.0
+
+jobs:
+  cobertura-cambio:
+    name: cobertura-cambio
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        # Con imagen vacía GitHub no levanta el servicio.
+        image: ${{ inputs.postgres && inputs.postgres-image || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::gates solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # El commit de merge y sus padres: HEAD^1 = base, HEAD^2 = punta del PR.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolver versión de Python
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        run: |
+          if [ -n "$INPUT_PYTHON_VERSION" ]; then version="$INPUT_PYTHON_VERSION"
+          elif [ -f .python-version ]; then version="$(head -n 1 .python-version | tr -d '[:space:]')"
+          elif [ -f "$GITHUB_WORKSPACE/.python-version" ]; then version="$(head -n 1 "$GITHUB_WORKSPACE/.python-version" | tr -d '[:space:]')"
+          else version="3.12"; fi
+          echo "UV_PYTHON=$version" >> "$GITHUB_ENV"
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-dir }}/uv.lock
+
+      - name: Exportar DATABASE_URL
+        if: inputs.postgres
+        run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test" >> "$GITHUB_ENV"
+
+      - name: uv sync --frozen
+        working-directory: ${{ inputs.backend-dir }}
+        run: uv sync --frozen
+
+      - name: Tests con medición de cobertura
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          COVERAGE_OMIT: ${{ inputs.coverage-omit }}
+        run: |
+          # coverage entra como herramienta efímera: el cliente no tiene que declararla.
+          # Si un test falla, el que frena es `ci / backend`; acá solo se avisa y se
+          # mide igual, para que la cobertura del cambio se vea en la misma corrida.
+          # coverage compara --omit contra rutas absolutas: se anclan al backend para que
+          # "tests/*" no excluya todo cuando el backend vive bajo una carpeta tests/.
+          omit=""
+          IFS=',' read -ra patrones <<< "$COVERAGE_OMIT"
+          for p in "${patrones[@]}"; do
+            p="$(echo "$p" | xargs)"
+            [ -n "$p" ] || continue
+            case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+            omit="${omit:+$omit,}$p"
+          done
+          if ! uv run --frozen --with "coverage==${VERSION_COVERAGE}" \
+              coverage run --source=. --omit="$omit" -m pytest; then
+            echo "::warning::pytest falló: la cobertura se mide con los tests que llegaron a correr (el check que frena por esto es ci / backend)."
+          fi
+          if ! uv run --frozen --with "coverage==${VERSION_COVERAGE}" coverage xml -q -o "$RUNNER_TEMP/coverage.xml"; then
+            echo "::warning::coverage no midió ningún archivo (¿el backend no tiene código Python fuera de los patrones omitidos?). Se toma como cobertura vacía."
+            printf '<?xml version="1.0" ?>\n<coverage version="%s"><sources><source>%s</source></sources><packages/></coverage>\n' "$VERSION_COVERAGE" "$PWD" > "$RUNNER_TEMP/coverage.xml"
+          fi
+
+      - name: Cobertura de las líneas cambiadas (diff-cover)
+        env:
+          COVERAGE_MIN: ${{ inputs.coverage-min }}
+        run: |
+          # HEAD^1...HEAD = solo lo que agrega o cambia el PR. Los archivos que no
+          # están en coverage.xml (tests, frontend, docs, migraciones) no cuentan.
+          set +e
+          uv tool run --from "diff-cover==${VERSION_DIFF_COVER}" diff-cover "$RUNNER_TEMP/coverage.xml" \
+            --compare-branch=HEAD^1 --fail-under="$COVERAGE_MIN" --ignore-unstaged \
+            --format "markdown:$RUNNER_TEMP/diff-cover.md"
+          code=$?
+          set -e
+          {
+            echo "## Cobertura del cambio (mínimo ${COVERAGE_MIN}%)"
+            cat "$RUNNER_TEMP/diff-cover.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::Menos del ${COVERAGE_MIN}% de las líneas que cambia el PR están cubiertas por tests. Detalle en el resumen del job."
+            exit 1
+          fi
+
+  migraciones:
+    name: migraciones
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      # true si alguna migración nueva tiene una operación de las reglas que frenan
+      # (DROP, RENAME, cambio de tipo...). Señal para clasificar el PR como zona alta.
+      destructiva: ${{ steps.squawk.outputs.destructiva }}
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BACKEND_DIR: ${{ inputs.backend-dir }}
+      BASE_DIR: ${{ github.workspace }}/../solbeet-base
+      HELPERS: ${{ github.workspace }}/../solbeet-helpers
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::gates solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Detectar Alembic
+        id: detectar
+        run: |
+          if [ -f "$BACKEND_DIR/alembic.ini" ]; then
+            echo "alembic=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "alembic=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No hay $BACKEND_DIR/alembic.ini: el repo no usa Alembic y el job migraciones no tiene nada que revisar."
+          fi
+          # La base del PR en un worktree aparte, para comparar.
+          git worktree add --detach "$BASE_DIR" HEAD^1 >/dev/null
+          if [ -f "$BASE_DIR/$BACKEND_DIR/alembic.ini" ]; then
+            echo "alembic_base=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "alembic_base=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolver versión de Python
+        if: steps.detectar.outputs.alembic == 'true'
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        run: |
+          if [ -n "$INPUT_PYTHON_VERSION" ]; then version="$INPUT_PYTHON_VERSION"
+          elif [ -f .python-version ]; then version="$(head -n 1 .python-version | tr -d '[:space:]')"
+          elif [ -f "$GITHUB_WORKSPACE/.python-version" ]; then version="$(head -n 1 "$GITHUB_WORKSPACE/.python-version" | tr -d '[:space:]')"
+          else version="3.12"; fi
+          echo "UV_PYTHON=$version" >> "$GITHUB_ENV"
+
+      - name: Instalar uv
+        if: steps.detectar.outputs.alembic == 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-dir }}/uv.lock
+
+      - name: Instalar squawk (versión fijada, checksum verificado)
+        if: steps.detectar.outputs.alembic == 'true'
+        run: |
+          case "$(uname -m)" in
+            x86_64) arch=x64; sum="$SQUAWK_SHA256_LINUX_X64" ;;
+            aarch64|arm64) arch=arm64; sum="$SQUAWK_SHA256_LINUX_ARM64" ;;
+            *) echo "::error::Arquitectura no soportada: $(uname -m)"; exit 1 ;;
+          esac
+          dir="$RUNNER_TEMP/squawk"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/squawk" \
+            "https://github.com/sbdchd/squawk/releases/download/v${SQUAWK_VERSION}/squawk-linux-${arch}"
+          echo "${sum}  $dir/squawk" | sha256sum -c -
+          chmod +x "$dir/squawk"
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Preparar entornos (PR y base)
+        if: steps.detectar.outputs.alembic == 'true'
+        run: |
+          (cd "$BACKEND_DIR" && uv sync --frozen)
+          if [ -f "$BASE_DIR/$BACKEND_DIR/alembic.ini" ]; then
+            (cd "$BASE_DIR/$BACKEND_DIR" && uv sync --frozen) || echo "::warning::No se pudo preparar el entorno de la base: todo lo que falle cuenta como nuevo."
+          fi
+          mkdir -p "$HELPERS"
+          # Helper que corre dentro del venv del cliente (necesita su alembic y sus modelos).
+          # revisiones: imprime {revision: down_revision} en JSON.
+          # sql RANGO SALIDA: escribe el SQL offline de un rango (dialecto Postgres).
+          # crear-base NOMBRE: crea (o recrea) una base vacía en el Postgres del job.
+          cat > "$HELPERS/solbeet_alembic_tool.py" <<'PY'
+          import json
+          import sys
+
+          from alembic import command
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+
+
+          def config(buffer=None):
+              cfg = Config("alembic.ini", output_buffer=buffer)
+              # Los env.py de la plantilla respetan este atributo y no reconfiguran el logging,
+              # así el SQL no se mezcla con logs.
+              cfg.attributes["configure_logger"] = False
+              return cfg
+
+
+          def driver():
+              for mod, scheme in (("psycopg", "postgresql+psycopg"), ("psycopg2", "postgresql+psycopg2")):
+                  try:
+                      __import__(mod)
+                      return scheme
+                  except ImportError:
+                      continue
+              return "postgresql"
+
+
+          accion = sys.argv[1]
+          if accion == "revisiones":
+              script = ScriptDirectory.from_config(config())
+              print(json.dumps({r.revision: r.down_revision for r in script.walk_revisions()}))
+          elif accion == "sql":
+              rango, salida = sys.argv[2], sys.argv[3]
+              with open(salida, "w") as buf:
+                  cfg = config(buf)
+                  cfg.set_main_option("sqlalchemy.url", f"{driver()}://u:p@localhost/offline")
+                  command.upgrade(cfg, rango, sql=True)
+          elif accion == "url":
+              print(f"{driver()}://postgres:postgres@localhost:5432/{sys.argv[2]}")
+          elif accion == "crear-base":
+              from sqlalchemy import create_engine, text
+
+              nombre = sys.argv[2]
+              eng = create_engine(f"{driver()}://postgres:postgres@localhost:5432/postgres", isolation_level="AUTOCOMMIT")
+              with eng.connect() as conn:
+                  conn.execute(text(f'DROP DATABASE IF EXISTS "{nombre}"'))
+                  conn.execute(text(f'CREATE DATABASE "{nombre}"'))
+              eng.dispose()
+          PY
+          # Plugin de pytest: le da a pytest-alembic el engine de la base del job.
+          cat > "$HELPERS/solbeet_alembic_plugin.py" <<'PY'
+          import os
+
+          import pytest
+          from sqlalchemy import create_engine
+
+
+          @pytest.fixture
+          def alembic_engine():
+              return create_engine(os.environ["SOLBEET_ALEMBIC_URL"])
+          PY
+
+      - name: Generar el SQL de las migraciones nuevas
+        if: steps.detectar.outputs.alembic == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/sql"
+          (cd "$BACKEND_DIR" && uv run --frozen python "$HELPERS/solbeet_alembic_tool.py" revisiones) > "$RUNNER_TEMP/rev-pr.json"
+          if [ -f "$BASE_DIR/$BACKEND_DIR/alembic.ini" ] && \
+             (cd "$BASE_DIR/$BACKEND_DIR" && uv run --frozen python "$HELPERS/solbeet_alembic_tool.py" revisiones) > "$RUNNER_TEMP/rev-base.json"; then
+            :
+          else
+            echo '{}' > "$RUNNER_TEMP/rev-base.json"
+          fi
+          # Una migración nueva = una revisión que está en el PR y no en la base.
+          # Se genera el SQL de cada una por separado (desde su revisión anterior).
+          python3 - "$RUNNER_TEMP/rev-pr.json" "$RUNNER_TEMP/rev-base.json" > "$RUNNER_TEMP/rangos.txt" <<'PY'
+          import json, sys
+          pr = json.load(open(sys.argv[1]))
+          base = json.load(open(sys.argv[2]))
+          for rev, down in pr.items():
+              if rev in base:
+                  continue
+              if isinstance(down, (list, tuple)):
+                  down = down[0]  # merge de ramas: se toma el primer padre
+              print(f"{rev} {down + ':' if down else ''}{rev}")
+          PY
+          if [ ! -s "$RUNNER_TEMP/rangos.txt" ]; then
+            echo "El PR no agrega migraciones."
+          fi
+          while read -r rev rango; do
+            [ -n "$rev" ] || continue
+            echo "Migración nueva: $rev"
+            (cd "$BACKEND_DIR" && uv run --frozen python "$HELPERS/solbeet_alembic_tool.py" sql "$rango" "$RUNNER_TEMP/sql/$rev.sql")
+          done < "$RUNNER_TEMP/rangos.txt"
+
+      - name: squawk sobre las migraciones nuevas
+        id: squawk
+        if: steps.detectar.outputs.alembic == 'true'
+        env:
+          BLOCKING_RULES: ${{ inputs.migrations-blocking-rules }}
+          SQL_DIR: ${{ runner.temp }}/sql
+        run: |
+          shopt -s nullglob
+          files=("$SQL_DIR"/*.sql)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "destructiva=false" >> "$GITHUB_OUTPUT"
+            echo "Sin migraciones nuevas: squawk no tiene nada que revisar."
+            exit 0
+          fi
+          # Alembic envuelve cada migración en una transacción: se avisa a squawk.
+          # squawk sale con 1 ante cualquier hallazgo; el veredicto lo decide el paso de abajo.
+          squawk --reporter json --assume-in-transaction --pg-version 17 "${files[@]}" > "$RUNNER_TEMP/squawk.json" || true
+          python3 - <<'PY'
+          import json, os, sys
+
+          blocking = set(os.environ.get("BLOCKING_RULES", "").split())
+          data = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "squawk.json")))
+          # El reporter json de squawk es una lista de violaciones.
+          items = data if isinstance(data, list) else data.get("violations", [])
+          ignorar = {"transaction-nesting"}  # el BEGIN/COMMIT lo pone Alembic, no el autor
+          frena, avisos = [], []
+          for v in items:
+              regla = v.get("rule_name", "")
+              if regla in ignorar:
+                  continue
+              rev = os.path.basename(v.get("file", "")).removesuffix(".sql")
+              texto = f"migración {rev}: {regla} · {v.get('message', '')}"
+              (frena if regla in blocking else avisos).append(texto)
+          for a in avisos:
+              print(f"::warning::{a}")
+          for f in frena:
+              print(f"::error::{f}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"destructiva={'true' if frena else 'false'}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("## Migraciones nuevas (squawk)\n\n")
+              if not frena and not avisos:
+                  s.write("Sin hallazgos.\n")
+              for f in frena:
+                  s.write(f"- **Frena:** {f}\n")
+              for a in avisos:
+                  s.write(f"- Aviso: {a}\n")
+          if frena:
+              print("Una migración nueva borra, renombra o cambia el tipo de algo que ya existe. "
+                    "Eso es una puerta de una vía: pide dale humano antes del merge (ADR 0004 §13.2).")
+              sys.exit(1)
+          PY
+
+      - name: pytest-alembic (PR, y base si hace falta comparar)
+        if: ${{ !cancelled() && steps.detectar.outputs.alembic == 'true' }}
+        env:
+          HAS_BASE: ${{ steps.detectar.outputs.alembic_base }}
+        run: |
+          # Corre las pruebas incluidas de pytest-alembic: una sola cabeza, upgrade
+          # desde cero, upgrade/downgrade consistente y modelos == DDL. Cada corrida
+          # usa una base nueva. Solo las pruebas de pytest-alembic (-m alembic).
+          correr() {  # dir nombre_base junit
+            local dir="$1" db="$2" junit="$3" url
+            (cd "$dir" && uv run --frozen python "$HELPERS/solbeet_alembic_tool.py" crear-base "$db")
+            url="$(cd "$dir" && uv run --frozen python "$HELPERS/solbeet_alembic_tool.py" url "$db")"
+            (cd "$dir" && DATABASE_URL="$url" SOLBEET_ALEMBIC_URL="$url" PYTHONPATH="$HELPERS${PYTHONPATH:+:$PYTHONPATH}" \
+              uv run --frozen --with "pytest-alembic==${VERSION_PYTEST_ALEMBIC}" --with "greenlet==${VERSION_GREENLET}" \
+              pytest -p solbeet_alembic_plugin --test-alembic -m alembic -o addopts="" -q -rA \
+              --junitxml="$junit")
+          }
+          if correr "$BACKEND_DIR" solbeet_pr "$RUNNER_TEMP/alembic-pr.xml"; then
+            echo "pytest-alembic: todo en verde."
+            exit 0
+          fi
+          : > "$RUNNER_TEMP/alembic-base.xml"
+          if [ "$HAS_BASE" = "true" ]; then
+            echo "::group::Misma prueba sobre la base, para separar lo heredado de lo nuevo"
+            correr "$BASE_DIR/$BACKEND_DIR" solbeet_base "$RUNNER_TEMP/alembic-base.xml" || true
+            echo "::endgroup::"
+          fi
+          python3 - "$RUNNER_TEMP/alembic-pr.xml" "$RUNNER_TEMP/alembic-base.xml" <<'PY'
+          import os, sys
+          import xml.etree.ElementTree as ET
+
+          def fallidos(path):
+              try:
+                  root = ET.parse(path).getroot()
+              except (ET.ParseError, FileNotFoundError):
+                  return None
+              out = set()
+              for tc in root.iter("testcase"):
+                  if tc.find("failure") is not None or tc.find("error") is not None:
+                      out.add(tc.get("name"))
+              return out
+
+          pr = fallidos(sys.argv[1])
+          if pr is None:
+              print("::error::pytest-alembic no llegó a correr sobre el PR (ver el log).")
+              sys.exit(1)
+          base = fallidos(sys.argv[2]) or set()
+          nuevos = sorted(pr - base)
+          heredados = sorted(pr & base)
+          for h in heredados:
+              print(f"::warning::{h} ya fallaba en la base: no lo introduce este PR.")
+          for n in nuevos:
+              print(f"::error::{n} falla con este PR y pasaba en la base.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("## Migraciones (pytest-alembic)\n\n")
+              for n in nuevos:
+                  s.write(f"- **Nuevo:** {n}\n")
+              for h in heredados:
+                  s.write(f"- Heredado (ya fallaba en la base): {h}\n")
+          sys.exit(1 if nuevos else 0)
+          PY
+
+  contrato:
+    name: contrato
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: ${{ inputs.contract-app != '' && inputs.postgres-image || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BACKEND_DIR: ${{ inputs.backend-dir }}
+      BASE_DIR: ${{ github.workspace }}/../solbeet-base
+      CONTRACT_APP: ${{ inputs.contract-app }}
+      CONTRACT_FACTORY: ${{ inputs.contract-factory }}
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::gates solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Sin app configurada
+        if: inputs.contract-app == ''
+        run: |
+          echo "::notice::contract-app vacío: el job contrato no corre. Configurarlo con la app ASGI (por ejemplo app.main:create_app)."
+
+      - name: Checkout
+        if: inputs.contract-app != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolver versión de Python
+        if: inputs.contract-app != ''
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        run: |
+          if [ -n "$INPUT_PYTHON_VERSION" ]; then version="$INPUT_PYTHON_VERSION"
+          elif [ -f .python-version ]; then version="$(head -n 1 .python-version | tr -d '[:space:]')"
+          elif [ -f "$GITHUB_WORKSPACE/.python-version" ]; then version="$(head -n 1 "$GITHUB_WORKSPACE/.python-version" | tr -d '[:space:]')"
+          else version="3.12"; fi
+          echo "UV_PYTHON=$version" >> "$GITHUB_ENV"
+
+      - name: Instalar uv
+        if: inputs.contract-app != ''
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-dir }}/uv.lock
+
+      - name: Schemathesis sobre la base y sobre el PR
+        if: inputs.contract-app != ''
+        env:
+          MAX_EXAMPLES: ${{ inputs.contract-max-examples }}
+          CHECKS: ${{ inputs.contract-checks }}
+        run: |
+          git worktree add --detach "$BASE_DIR" HEAD^1 >/dev/null
+          factory=()
+          [ "$CONTRACT_FACTORY" = "true" ] && factory=(--factory)
+
+          levantar() {  # dir puerto nombre_base log -> 0 si la app respondió el OpenAPI
+            local dir="$1" port="$2" db="$3" log="$4" url driver
+            (cd "$dir" && uv sync --frozen) >> "$log" 2>&1 || return 1
+            driver="$(cd "$dir" && uv run --frozen python -c 'import importlib.util as u; print("postgresql+psycopg" if u.find_spec("psycopg") else "postgresql+psycopg2" if u.find_spec("psycopg2") else "postgresql")')"
+            url="${driver}://postgres:postgres@localhost:5432/${db}"
+            (cd "$dir" && uv run --frozen python -c "
+          from sqlalchemy import create_engine, text
+          e = create_engine('${driver}://postgres:postgres@localhost:5432/postgres', isolation_level='AUTOCOMMIT')
+          with e.connect() as c:
+              c.execute(text('DROP DATABASE IF EXISTS \"${db}\"'))
+              c.execute(text('CREATE DATABASE \"${db}\"'))
+          ") >> "$log" 2>&1 || true
+            if [ -f "$dir/alembic.ini" ]; then
+              (cd "$dir" && DATABASE_URL="$url" uv run --frozen alembic upgrade head) >> "$log" 2>&1 || return 1
+            fi
+            local with=()
+            (cd "$dir" && uv run --frozen python -c 'import uvicorn') >/dev/null 2>&1 || with=(--with "uvicorn==${VERSION_UVICORN}")
+            echo "--- uvicorn" >> "$log"
+            (cd "$dir" && DATABASE_URL="$url" nohup uv run --frozen "${with[@]}" uvicorn "$CONTRACT_APP" "${factory[@]}" \
+              --host 127.0.0.1 --port "$port" >> "$log" 2>&1 &)
+            for _ in $(seq 1 60); do
+              curl -fsS "http://127.0.0.1:${port}/openapi.json" -o /dev/null 2>/dev/null && return 0
+              sleep 1
+            done
+            return 1
+          }
+
+          correr() {  # puerto archivo_baseline
+            # --generation-deterministic: los mismos casos en las dos corridas, así se
+            # comparan. --baseline-update registra los fallos encontrados (operación,
+            # check, firma) en un archivo; el veredicto lo arma el paso siguiente.
+            uv tool run --from "schemathesis==${VERSION_SCHEMATHESIS}" schemathesis run \
+              "http://127.0.0.1:$1/openapi.json" --checks "$CHECKS" --max-examples "$MAX_EXAMPLES" \
+              --generation-deterministic --baseline-update --baseline "$2" \
+              --report ndjson --report-ndjson-path "$2.ndjson" --no-color || true
+          }
+
+          if [ -f "$BASE_DIR/$BACKEND_DIR/pyproject.toml" ] && levantar "$BASE_DIR/$BACKEND_DIR" 8001 solbeet_base "$RUNNER_TEMP/app-base.log"; then
+            echo "::group::Schemathesis sobre la base"
+            correr 8001 "$RUNNER_TEMP/contrato-base.json"
+            echo "::endgroup::"
+          else
+            echo "::notice::La base no levanta la app (o no la tiene): todo lo que falle cuenta como nuevo."
+          fi
+          if ! levantar "$BACKEND_DIR" 8000 solbeet_pr "$RUNNER_TEMP/app-pr.log"; then
+            echo "::error::La app del PR no levantó o no sirve /openapi.json. Últimas líneas del log:"
+            sed -n '/^--- uvicorn/,$p' "$RUNNER_TEMP/app-pr.log" | tail -n 40
+            exit 1
+          fi
+          echo "::group::Schemathesis sobre el PR"
+          correr 8000 "$RUNNER_TEMP/contrato-pr.json"
+          echo "::endgroup::"
+
+          # La generación no es idéntica entre corridas (depende del estado de la base y
+          # de los tiempos), así que la corrida sobre la base puede no haber encontrado
+          # un fallo que ya existía. Para cada operación que falla solo en el PR se
+          # insiste sobre la base con más casos, solo en esa operación, antes de
+          # declararlo nuevo. Si la base no tiene la operación, queda como nuevo.
+          if [ -f "$RUNNER_TEMP/contrato-pr.json" ] && curl -fsS "http://127.0.0.1:8001/openapi.json" -o /dev/null 2>/dev/null; then
+            python3 - "$RUNNER_TEMP/contrato-pr.json" "$RUNNER_TEMP/contrato-base.json" > "$RUNNER_TEMP/candidatos.txt" <<'PY'
+          import json, sys
+          def keys(p):
+              try:
+                  return {(e["operation"], e["check"], e["failure"], e["signature"]) for e in json.load(open(p))["entries"]}
+              except FileNotFoundError:
+                  return set()
+          base = keys(sys.argv[2])
+          for op in sorted({k[0] for k in keys(sys.argv[1]) - base}):
+              print(op)
+          PY
+            # 1) Reenviar a la base las mismas peticiones que dieron 5xx en el PR: si la
+            #    base también responde 5xx, el fallo es heredado. Es determinista.
+            python3 - "$RUNNER_TEMP/contrato-pr.json.ndjson" "$RUNNER_TEMP/candidatos.txt" "$RUNNER_TEMP/contrato-confirmados.json" <<'PY'
+          import base64, json, sys, urllib.request, urllib.error
+          nd, cand, out = sys.argv[1], sys.argv[2], sys.argv[3]
+          ops = {l.strip() for l in open(cand) if l.strip()}
+          pedidos = {}
+          try:
+              lines = open(nd).read().splitlines()
+          except FileNotFoundError:
+              lines = []
+          for line in lines:
+              ev = json.loads(line).get("ScenarioFinished")
+              if not ev:
+                  continue
+              rec = ev.get("recorder", {})
+              for cid, checks in rec.get("checks", {}).items():
+                  for c in checks:
+                      if c.get("status") != "failure" or c.get("name") != "not_a_server_error":
+                          continue
+                      op = c.get("failure_info", {}).get("failure", {}).get("operation") or rec.get("label")
+                      inter = rec.get("interactions", {}).get(cid)
+                      if op in ops and inter:
+                          pedidos.setdefault(op, []).append(inter["request"])
+          confirmados = []
+          for op, reqs in pedidos.items():
+              for req in reqs[:5]:
+                  body = req.get("body")
+                  data = base64.b64decode(body["$base64"]) if isinstance(body, dict) and "$base64" in body else None
+                  headers = {k: v[0] for k, v in (req.get("headers") or {}).items() if v}
+                  url = req["uri"].replace("127.0.0.1:8000", "127.0.0.1:8001", 1)
+                  try:
+                      status = urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers, method=req["method"]), timeout=10).status
+                  except urllib.error.HTTPError as e:
+                      status = e.code
+                  except Exception:
+                      status = 0
+                  if status >= 500:
+                      print(f"{op}: la misma petición también da {status} en la base (heredado).")
+                      confirmados.append([op, "not_a_server_error"])
+                      break
+          json.dump(confirmados, open(out, "w"))
+          PY
+            # 2) Para el resto, insistir con más casos solo en esa operación.
+            while IFS= read -r op; do
+              [ -n "$op" ] || continue
+              echo "::group::Confirmación sobre la base: $op"
+              uv tool run --from "schemathesis==${VERSION_SCHEMATHESIS}" schemathesis run \
+                "http://127.0.0.1:8001/openapi.json" --checks "$CHECKS" --max-examples "$((MAX_EXAMPLES * 10))" \
+                --include-name "$op" --phases examples,coverage,fuzzing \
+                --baseline-update --baseline "$RUNNER_TEMP/contrato-base.json" --no-color || true
+              echo "::endgroup::"
+            done < "$RUNNER_TEMP/candidatos.txt"
+          fi
+
+      - name: Veredicto del contrato
+        if: inputs.contract-app != ''
+        env:
+          BASELINE_PR: ${{ runner.temp }}/contrato-pr.json
+          BASELINE_BASE: ${{ runner.temp }}/contrato-base.json
+          CONFIRMADOS: ${{ runner.temp }}/contrato-confirmados.json
+        shell: python3 {0}
+        run: |
+          """Frena solo los fallos de contrato que no estaban en la base."""
+          import json
+          import os
+          import sys
+
+          def entradas(path):
+              try:
+                  with open(path) as f:
+                      data = json.load(f)
+              except FileNotFoundError:
+                  return {}
+              return {
+                  (e.get("operation"), e.get("check"), e.get("failure"), e.get("signature")): e
+                  for e in data.get("entries", [])
+              }
+
+          pr = entradas(os.environ["BASELINE_PR"])
+          base = entradas(os.environ["BASELINE_BASE"])
+          try:
+              with open(os.environ["CONFIRMADOS"]) as f:
+                  confirmados = {tuple(x) for x in json.load(f)}
+          except (FileNotFoundError, KeyError):
+              confirmados = set()
+
+          def heredado(k):
+              return k in base or (k[0], k[1]) in confirmados
+
+          nuevos = [pr[k] for k in pr if not heredado(k)]
+          heredados = [pr[k] for k in pr if heredado(k)]
+          for e in heredados:
+              print(f"::warning::{e['operation']}: {e['check']} ({e['signature']}) ya fallaba en la base.")
+          for e in nuevos:
+              print(f"::error::{e['operation']}: {e['check']} ({e['signature']}) es nuevo con este PR.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("## Contrato de la API (Schemathesis)\n\n")
+              if not pr:
+                  s.write("Sin fallos: la API responde lo que declara su OpenAPI en todos los casos generados.\n")
+              for e in nuevos:
+                  s.write(f"- **Nuevo:** `{e['operation']}` · {e['check']} · {e['signature']}\n")
+              for e in heredados:
+                  s.write(f"- Heredado (ya fallaba en la base): `{e['operation']}` · {e['check']} · {e['signature']}\n")
+          sys.exit(1 if nuevos else 0)
+
+  dependencias:
+    name: dependencias
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    env:
+      BASE_DIR: ${{ github.workspace }}/../solbeet-base
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::gates solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Instalar OSV-Scanner (versión fijada, checksum verificado)
+        run: |
+          case "$(uname -m)" in
+            x86_64) arch=amd64; sum="$OSV_SCANNER_SHA256_LINUX_X64" ;;
+            aarch64|arm64) arch=arm64; sum="$OSV_SCANNER_SHA256_LINUX_ARM64" ;;
+            *) echo "::error::Arquitectura no soportada: $(uname -m)"; exit 1 ;;
+          esac
+          dir="$RUNNER_TEMP/osv"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_${arch}"
+          echo "${sum}  $dir/osv-scanner" | sha256sum -c -
+          chmod +x "$dir/osv-scanner"
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Escanear lockfiles del PR y de la base
+        run: |
+          git worktree add --detach "$BASE_DIR" HEAD^1 >/dev/null
+          escanear() {  # dir salida
+            local code=0
+            (cd "$1" && osv-scanner scan source -r --format json . > "$2") || code=$?
+            # 0 = sin vulnerabilidades, 1 = con vulnerabilidades, 128 = no encontró lockfiles.
+            case "$code" in
+              0|1) ;;
+              128) echo '{"results": []}' > "$2" ;;
+              *) echo "::error::osv-scanner terminó con código $code en $1"; return 1 ;;
+            esac
+          }
+          escanear "$GITHUB_WORKSPACE" "$RUNNER_TEMP/osv-pr.json"
+          escanear "$BASE_DIR" "$RUNNER_TEMP/osv-base.json" || echo '{"results": []}' > "$RUNNER_TEMP/osv-base.json"
+
+      - name: Veredicto de dependencias
+        env:
+          OSV_PR: ${{ runner.temp }}/osv-pr.json
+          OSV_BASE: ${{ runner.temp }}/osv-base.json
+          ROOT_PR: ${{ github.workspace }}
+          ROOT_BASE: ${{ github.workspace }}/../solbeet-base
+          MIN_SEVERITY: ${{ inputs.vuln-min-severity }}
+        shell: python3 {0}
+        run: |
+          """Frena las vulnerabilidades altas/críticas con arreglo que agrega el PR.
+
+          Una vulnerabilidad se identifica por (lockfile relativo, ecosistema,
+          paquete, id del grupo OSV). Si ya estaba en la base es heredada: aviso.
+          """
+          import json
+          import os
+          import sys
+
+          def cargar(path, root):
+              root = os.path.realpath(root)
+              out = {}
+              with open(path) as f:
+                  data = json.load(f)
+              for res in data.get("results", []):
+                  src = os.path.relpath(os.path.realpath(res.get("source", {}).get("path", "")), root)
+                  for p in res.get("packages", []):
+                      pkg = p.get("package", {})
+                      vulns = {v.get("id"): v for v in p.get("vulnerabilities", [])}
+                      for g in p.get("groups", []):
+                          ids = g.get("ids", [])
+                          try:
+                              sev = float(g.get("max_severity") or 0)
+                          except ValueError:
+                              sev = 0.0
+                          arreglo = False
+                          for vid in ids:
+                              for aff in vulns.get(vid, {}).get("affected", []):
+                                  if aff.get("package", {}).get("name") != pkg.get("name"):
+                                      continue
+                                  for rng in aff.get("ranges", []):
+                                      if any("fixed" in ev for ev in rng.get("events", [])):
+                                          arreglo = True
+                          key = (src, pkg.get("ecosystem"), pkg.get("name"), ids[0] if ids else "?")
+                          out[key] = {"version": pkg.get("version"), "sev": sev, "arreglo": arreglo, "ids": ids}
+              return out
+
+          pr = cargar(os.environ["OSV_PR"], os.environ["ROOT_PR"])
+          base = cargar(os.environ["OSV_BASE"], os.environ["ROOT_BASE"])
+          minimo = float(os.environ.get("MIN_SEVERITY") or 7)
+          frena, avisos, heredadas = [], [], []
+          for key, info in sorted(pr.items()):
+              src, eco, name, vid = key
+              texto = f"{name} {info['version']} ({eco}, {src}): {', '.join(info['ids'])} · CVSS {info['sev']:g}"
+              if key in base:
+                  heredadas.append(texto)
+              elif info["sev"] >= minimo and info["arreglo"]:
+                  frena.append(texto + " · hay versión arreglada")
+              else:
+                  avisos.append(texto + ("" if info["arreglo"] else " · sin versión arreglada"))
+          for t in frena:
+              print(f"::error::Dependencia vulnerable nueva: {t}")
+          for t in avisos:
+              print(f"::warning::Dependencia vulnerable nueva (no frena): {t}")
+          if heredadas:
+              print(f"::notice::{len(heredadas)} vulnerabilidades ya estaban en la base (no las introduce este PR).")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"## Dependencias (OSV-Scanner, frena CVSS ≥ {minimo:g} con arreglo)\n\n")
+              if not (frena or avisos or heredadas):
+                  s.write("Sin vulnerabilidades conocidas en los lockfiles.\n")
+              for t in frena:
+                  s.write(f"- **Frena:** {t}\n")
+              for t in avisos:
+                  s.write(f"- Aviso: {t}\n")
+              if heredadas:
+                  s.write(f"\n<details><summary>{len(heredadas)} heredadas de la base</summary>\n\n")
+                  for t in heredadas:
+                      s.write(f"- {t}\n")
+                  s.write("\n</details>\n")
+          sys.exit(1 if frena else 0)
