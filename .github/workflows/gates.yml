@@ -46,9 +46,9 @@ on:
         type: number
         default: 80
       coverage-omit:
-        description: Patrones (coma) que no se miden en la cobertura, relativos a backend-dir.
+        description: Patrones (coma) que no se miden en la cobertura, relativos a backend-dir (se anclan a ese directorio).
         type: string
-        default: "tests/*,*/tests/*,migrations/*,*/migrations/*"
+        default: "tests/*,migrations/*"
       migrations-blocking-rules:
         description: Reglas de squawk que frenan el PR (separadas por espacios). Las demás se informan como aviso.
         type: string
@@ -93,11 +93,15 @@ env:
   OSV_SCANNER_VERSION: 2.6.0
   OSV_SCANNER_SHA256_LINUX_X64: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
   OSV_SCANNER_SHA256_LINUX_ARM64: 2c71403eb443d05891c4f268c3ad771cf4f16e5443463fd7851ef8f454d3c7e4
-  COVERAGE_VERSION: 7.16.2
-  DIFF_COVER_VERSION: 10.6.0
-  PYTEST_ALEMBIC_VERSION: 0.13.0
-  SCHEMATHESIS_VERSION: 4.28.0
-  UVICORN_VERSION: 0.53.0
+  # Las versiones de herramientas Python van como VERSION_<X> y no <X>_VERSION:
+  # uvicorn y schemathesis leen variables con su prefijo como opciones de la CLI
+  # (UVICORN_VERSION se toma como --version).
+  VERSION_COVERAGE: 7.16.2
+  VERSION_DIFF_COVER: 10.6.0
+  VERSION_PYTEST_ALEMBIC: 0.13.0
+  VERSION_GREENLET: 3.5.6
+  VERSION_SCHEMATHESIS: 4.28.0
+  VERSION_UVICORN: 0.53.0
 
 jobs:
   cobertura-cambio:
@@ -169,11 +173,24 @@ jobs:
           # coverage entra como herramienta efímera: el cliente no tiene que declararla.
           # Si un test falla, el que frena es `ci / backend`; acá solo se avisa y se
           # mide igual, para que la cobertura del cambio se vea en la misma corrida.
-          if ! uv run --frozen --with "coverage==${COVERAGE_VERSION}" \
-              coverage run --source=. --omit="$COVERAGE_OMIT" -m pytest; then
+          # coverage compara --omit contra rutas absolutas: se anclan al backend para que
+          # "tests/*" no excluya todo cuando el backend vive bajo una carpeta tests/.
+          omit=""
+          IFS=',' read -ra patrones <<< "$COVERAGE_OMIT"
+          for p in "${patrones[@]}"; do
+            p="$(echo "$p" | xargs)"
+            [ -n "$p" ] || continue
+            case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+            omit="${omit:+$omit,}$p"
+          done
+          if ! uv run --frozen --with "coverage==${VERSION_COVERAGE}" \
+              coverage run --source=. --omit="$omit" -m pytest; then
             echo "::warning::pytest falló: la cobertura se mide con los tests que llegaron a correr (el check que frena por esto es ci / backend)."
           fi
-          uv run --frozen --with "coverage==${COVERAGE_VERSION}" coverage xml -q -o "$RUNNER_TEMP/coverage.xml"
+          if ! uv run --frozen --with "coverage==${VERSION_COVERAGE}" coverage xml -q -o "$RUNNER_TEMP/coverage.xml"; then
+            echo "::warning::coverage no midió ningún archivo (¿el backend no tiene código Python fuera de los patrones omitidos?). Se toma como cobertura vacía."
+            printf '<?xml version="1.0" ?>\n<coverage version="%s"><sources><source>%s</source></sources><packages/></coverage>\n' "$VERSION_COVERAGE" "$PWD" > "$RUNNER_TEMP/coverage.xml"
+          fi
 
       - name: Cobertura de las líneas cambiadas (diff-cover)
         env:
@@ -182,7 +199,7 @@ jobs:
           # HEAD^1...HEAD = solo lo que agrega o cambia el PR. Los archivos que no
           # están en coverage.xml (tests, frontend, docs, migraciones) no cuentan.
           set +e
-          uv tool run --from "diff-cover==${DIFF_COVER_VERSION}" diff-cover "$RUNNER_TEMP/coverage.xml" \
+          uv tool run --from "diff-cover==${VERSION_DIFF_COVER}" diff-cover "$RUNNER_TEMP/coverage.xml" \
             --compare-branch=HEAD^1 --fail-under="$COVERAGE_MIN" --ignore-unstaged \
             --format "markdown:$RUNNER_TEMP/diff-cover.md"
           code=$?
@@ -463,7 +480,7 @@ jobs:
             (cd "$dir" && uv run --frozen python "$HELPERS/solbeet_alembic_tool.py" crear-base "$db")
             url="$(cd "$dir" && uv run --frozen python "$HELPERS/solbeet_alembic_tool.py" url "$db")"
             (cd "$dir" && DATABASE_URL="$url" SOLBEET_ALEMBIC_URL="$url" PYTHONPATH="$HELPERS${PYTHONPATH:+:$PYTHONPATH}" \
-              uv run --frozen --with "pytest-alembic==${PYTEST_ALEMBIC_VERSION}" --with greenlet \
+              uv run --frozen --with "pytest-alembic==${VERSION_PYTEST_ALEMBIC}" --with "greenlet==${VERSION_GREENLET}" \
               pytest -p solbeet_alembic_plugin --test-alembic -m alembic -o addopts="" -q -rA \
               --junitxml="$junit")
           }
@@ -602,7 +619,8 @@ jobs:
               (cd "$dir" && DATABASE_URL="$url" uv run --frozen alembic upgrade head) >> "$log" 2>&1 || return 1
             fi
             local with=()
-            (cd "$dir" && uv run --frozen python -c 'import uvicorn') >/dev/null 2>&1 || with=(--with "uvicorn==${UVICORN_VERSION}")
+            (cd "$dir" && uv run --frozen python -c 'import uvicorn') >/dev/null 2>&1 || with=(--with "uvicorn==${VERSION_UVICORN}")
+            echo "--- uvicorn" >> "$log"
             (cd "$dir" && DATABASE_URL="$url" nohup uv run --frozen "${with[@]}" uvicorn "$CONTRACT_APP" "${factory[@]}" \
               --host 127.0.0.1 --port "$port" >> "$log" 2>&1 &)
             for _ in $(seq 1 60); do
@@ -616,7 +634,7 @@ jobs:
             # --generation-deterministic: los mismos casos en las dos corridas, así se
             # comparan. --baseline-update registra los fallos encontrados (operación,
             # check, firma) en un archivo; el veredicto lo arma el paso siguiente.
-            uv tool run --from "schemathesis==${SCHEMATHESIS_VERSION}" schemathesis run \
+            uv tool run --from "schemathesis==${VERSION_SCHEMATHESIS}" schemathesis run \
               "http://127.0.0.1:$1/openapi.json" --checks "$CHECKS" --max-examples "$MAX_EXAMPLES" \
               --generation-deterministic --baseline-update --baseline "$2" --no-color || true
           }
@@ -630,7 +648,7 @@ jobs:
           fi
           if ! levantar "$BACKEND_DIR" 8000 solbeet_pr "$RUNNER_TEMP/app-pr.log"; then
             echo "::error::La app del PR no levantó o no sirve /openapi.json. Últimas líneas del log:"
-            tail -n 40 "$RUNNER_TEMP/app-pr.log"
+            sed -n '/^--- uvicorn/,$p' "$RUNNER_TEMP/app-pr.log" | tail -n 40
             exit 1
           fi
           echo "::group::Schemathesis sobre el PR"
