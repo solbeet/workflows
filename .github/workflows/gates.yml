@@ -655,6 +655,34 @@ jobs:
           correr 8000 "$RUNNER_TEMP/contrato-pr.json"
           echo "::endgroup::"
 
+          # La generación no es idéntica entre corridas (depende del estado de la base y
+          # de los tiempos), así que la corrida sobre la base puede no haber encontrado
+          # un fallo que ya existía. Para cada operación que falla solo en el PR se
+          # insiste sobre la base con más casos, solo en esa operación, antes de
+          # declararlo nuevo. Si la base no tiene la operación, queda como nuevo.
+          if [ -f "$RUNNER_TEMP/contrato-pr.json" ] && curl -fsS "http://127.0.0.1:8001/openapi.json" -o /dev/null 2>/dev/null; then
+            python3 - "$RUNNER_TEMP/contrato-pr.json" "$RUNNER_TEMP/contrato-base.json" > "$RUNNER_TEMP/candidatos.txt" <<'PY'
+          import json, sys
+          def keys(p):
+              try:
+                  return {(e["operation"], e["check"], e["failure"], e["signature"]) for e in json.load(open(p))["entries"]}
+              except FileNotFoundError:
+                  return set()
+          base = keys(sys.argv[2])
+          for op in sorted({k[0] for k in keys(sys.argv[1]) - base}):
+              print(op)
+          PY
+            while IFS= read -r op; do
+              [ -n "$op" ] || continue
+              echo "::group::Confirmación sobre la base: $op"
+              uv tool run --from "schemathesis==${VERSION_SCHEMATHESIS}" schemathesis run \
+                "http://127.0.0.1:8001/openapi.json" --checks "$CHECKS" --max-examples "$((MAX_EXAMPLES * 10))" \
+                --include-name "$op" --phases examples,coverage,fuzzing \
+                --baseline-update --baseline "$RUNNER_TEMP/contrato-base.json" --no-color || true
+              echo "::endgroup::"
+            done < "$RUNNER_TEMP/candidatos.txt"
+          fi
+
       - name: Veredicto del contrato
         if: inputs.contract-app != ''
         env:
