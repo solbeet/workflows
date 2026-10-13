@@ -75,6 +75,9 @@ jobs:
       - name: Casos de la guardia de tests
         run: uv run --no-project --with pyyaml==6.0.2 python tests/guardia/test_guardia.py
 
+      - name: Casos de rojo → verde (uv y pytest de verdad sobre el fixture)
+        run: uv run --no-project --with pyyaml==6.0.2 python tests/rojo_verde/test_rojo_verde.py
+
   ci:
     name: ci
     uses: ./.github/workflows/python-react.yml
@@ -118,3 +121,17 @@ jobs:
       pull-requests: read
       issues: read
       actions: read
+
+  rojo-verde:
+    name: rojo-verde
+    # Sobre el propio PR: el backend del fixture rara vez gana tests nuevos, así que
+    # lo normal es "no aplica". Los casos que deben fallar están en hygiene-logic.
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/rojo-verde.yml
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+    with:
+      backend-dir: tests/fixture/backend
