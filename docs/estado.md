@@ -1,6 +1,16 @@
 # Estado
 
-Última actualización: 2026-10-13 · Sin publicar: v1.4.0 (`gates.yml`, V1) y v1.5.0 (`guardia-tests.yml`, V2); ver abajo. Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
+Última actualización: 2026-10-13 · Sin publicar: v1.4.0 (`gates.yml`, V1) v1.5.0 (`guardia-tests.yml`, V2) y v1.6.0 (`rojo-verde.yml`, V3); ver abajo. Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
+
+## v1.6.0 (sin publicar): `rojo-verde.yml`
+
+| Qué | Cómo | Resultado |
+|---|---|---|
+| Los cuatro caminos con uv y pytest de verdad | `tests/rojo_verde/test_rojo_verde.py` sobre el fixture (macOS, bash 3.2) | 4/4: test nuevo rojo→verde → verde; test espejo → rojo; PR solo de tests → no aplica; test que no pasa con el cambio → rojo |
+| Test espejo en un repo real | `solbeet-pruebas/app-prueba#16`: agrega `/api/version` con un test que no lo ejercita | `solbeet / rojo-verde` en rojo («ya pasaba sin el cambio») |
+| Contraprueba | `app-prueba#17`: `/api/version` con su test | `solbeet / rojo-verde` en verde, tabla «sin el cambio: falla · con el cambio: pasa» |
+
+No verificado: el dale humano contra la API real (mismo código que la guardia, probado con la API simulada allá). Solo Python: vitest y jest quedan para más adelante.
 
 ## v1.5.0 (sin publicar): `guardia-tests.yml`
 
