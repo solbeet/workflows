@@ -1,0 +1,23 @@
+# Ejemplo para un repo cliente: copiar a .github/workflows/verificacion.yml.
+# Checks resultantes (candidatos a requeridos para el merge automático):
+# "solbeet / cobertura-cambio", "solbeet / migraciones", "solbeet / contrato" y
+# "solbeet / dependencias". Solo frenan lo que introduce el PR: lo que ya fallaba
+# en la rama base se informa como aviso.
+name: verificacion
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: solbeet
+    uses: solbeet/workflows/.github/workflows/gates.yml@v1
+    with:
+      backend-dir: backend
+      # App ASGI que Schemathesis prueba contra su OpenAPI. Vacío = sin contrato.
+      contract-app: app.main:create_app
+      contract-factory: true
+      # coverage-min: 80

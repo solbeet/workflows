@@ -69,6 +69,9 @@ jobs:
       - name: Casos de pr-hygiene
         run: uv run --no-project --with pyyaml==6.0.2 python tests/hygiene/test_pr_hygiene.py
 
+      - name: Casos de gates (veredictos de squawk, contrato y dependencias)
+        run: uv run --no-project --with pyyaml==6.0.2 python tests/gates/test_gates.py
+
   ci:
     name: ci
     uses: ./.github/workflows/python-react.yml
@@ -89,3 +92,14 @@ jobs:
     name: pr-hygiene
     if: github.event_name == 'pull_request'
     uses: ./.github/workflows/pr-hygiene.yml
+
+  gates:
+    name: gates
+    # Ejercita los cuatro jobs contra el fixture: cobertura del cambio, migraciones
+    # (el fixture no usa Alembic: tiene que saltear con aviso), contrato con la app
+    # del fixture levantada en el runner y dependencias sobre sus lockfiles.
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/gates.yml
+    with:
+      backend-dir: tests/fixture/backend
+      contract-app: app.main:app
