@@ -4,7 +4,12 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ## [1.6.0] - 2026-10-14
 
-Sin tag publicado: sale junto con `rojo-verde.yml` (#14).
+Sin tag publicado: se etiqueta al mergear #14 (`rojo-verde.yml`), que entra después del arreglo de la guardia (#15).
+
+### Agregado
+
+- `rojo-verde.yml` (fase V, ítem V3, solbeet/workflows#10): job `rojo-verde` que corre los tests nuevos del PR contra la base (tienen que fallar) y contra el PR (tienen que pasar); tabla en el resumen del job; label `tests-con-dale` para tests de caracterización.
+- `examples/rojo-verde.yml` y `tests/rojo_verde/test_rojo_verde.py` (uv y pytest de verdad sobre el fixture, en `selftest / hygiene-logic`).
 
 ### Corregido
 

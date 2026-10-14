@@ -18,6 +18,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`imagen.yml`](.github/workflows/imagen.yml) | Construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` con tag = versión semver sin `v` y `sha-<sha7>` (sin `latest`); el sha completo va como label y anotación `org.opencontainers.image.revision` (outputs `tag` y `revision`). Usa el `GITHUB_TOKEN` con `packages: write` | `imagen` (no es check requerido) |
 | [`gates.yml`](.github/workflows/gates.yml) | Gates sobre el diff del PR (fase V): cobertura de las líneas cambiadas, migraciones (pytest-alembic + squawk), contrato de la API (Schemathesis) y dependencias vulnerables (OSV-Scanner). Solo frena lo que introduce el PR | `cobertura-cambio`, `migraciones`, `contrato`, `dependencias` |
 | [`guardia-tests.yml`](.github/workflows/guardia-tests.yml) | Guardia de tests (fase V): frena el PR que borra, debilita o saltea tests existentes, o toca tests de aceptación, salvo dale de una persona (label) | `tests` |
+| [`rojo-verde.yml`](.github/workflows/rojo-verde.yml) | Rojo → verde (fase V): cada test nuevo de Python tiene que fallar sin el cambio y pasar con él | `rojo-verde` |
 | [`selftest.yml`](.github/workflows/selftest.yml) | Uso interno: lintea los workflows y los ejecuta contra el fixture de `tests/fixture/` | — |
 
 ## Requisitos (repo cliente)
@@ -184,6 +185,32 @@ No frena: tests nuevos (en archivos nuevos o existentes), cambiar setup, fixture
 
 **Dale humano:** una persona revisa el cambio y pone el label `tests-con-dale`. Vale si lo puso alguien que no es bot ni autor del PR (y está en `override-approvers`, si se configuró) **después del último push**: si el PR cambia, hay que volver a ponerlo. El uso queda en el resumen del job.
 
+### `rojo-verde.yml`
+
+Un test nuevo tiene que demostrar que prueba el cambio: con el código de la base tiene que fallar y con el del PR tiene que pasar. Un test que pasa igual sin el cambio (el «test espejo», o uno que no ejercita lo nuevo) no prueba nada. Solo con `pull_request`.
+
+| Input | Tipo | Default | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `backend-dir` | string | `backend` | no | Directorio con `pyproject.toml` y `uv.lock`. |
+| `python-version` | string | `""` | no | Igual que en `python-react.yml`. |
+| `postgres` | boolean | `false` | no | Postgres para los tests (exporta `DATABASE_URL`). |
+| `postgres-image` | string | `postgres:17` | no | Imagen del servicio Postgres. |
+| `test-paths` | string (multilínea) | patrones de tests de Python | no | Qué archivos cuentan como tests. |
+| `ignore-paths` | string (multilínea) | `*.md`, `docs/*`, `.github/*`, lockfiles, config | no | Archivos que no cuentan como cambio de código. |
+| `override-label` | string | `tests-con-dale` | no | Label del dale humano para tests que ya pasaban (caracterización). |
+
+Permisos del caller: los mismos que `guardia-tests.yml`.
+
+Cómo funciona: lista los tests nuevos del PR (funciones `test*` y métodos `test*` de `Test*`), copia los archivos de tests del PR sobre un checkout de la base y los corre ahí; después los corre sobre el PR. Si el PR no cambia código (solo tests, docs o config) o no agrega tests de Python, no aplica (verde). La tabla test | sin el cambio | con el cambio queda en el resumen del job.
+
+| Resultado | Check |
+|---|---|
+| todos los tests nuevos fallan sin el cambio y pasan con él | verde |
+| un test nuevo pasa sin el cambio (o se saltea) | rojo, salvo label `tests-con-dale` de una persona (mismas reglas que la guardia): caso legítimo, tests de caracterización antes de un refactor |
+| un test nuevo no pasa con el cambio | rojo, sin vía de escape |
+
+Hoy solo Python (pytest) dentro de `backend-dir`; un parametrizado cuenta como rojo en la base si falla al menos un caso.
+
 ## Checks requeridos
 
 Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que llama> / <job del reutilizable>`. Con los ejemplos de `examples/` quedan:
@@ -196,6 +223,7 @@ Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que lla
 | `pr-hygiene / secret-scan` | sí |
 | `solbeet / cobertura-cambio`, `solbeet / migraciones`, `solbeet / contrato`, `solbeet / dependencias` | sí, antes de prender el merge automático (con `examples/gates.yml`, cuyo job se llama `solbeet`) |
 | `solbeet / tests` | sí, antes de prender el merge automático (con `examples/guardia-tests.yml`) |
+| `solbeet / rojo-verde` | sí, antes de prender el merge automático (con `examples/rojo-verde.yml`) |
 | `claude-review / review` | **no**: es informativo. Depende de un servicio externo y de secretos que los forks no reciben |
 
 Si el repo cliente le pone otro id (o `name:`) al job que llama, la primera parte del nombre cambia. Los nombres de los jobs de este repo (`backend`, `frontend`, `review`, `hygiene`, `secret-scan`) son parte del contrato y solo cambian en una versión mayor.

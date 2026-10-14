@@ -1,0 +1,423 @@
+# Rojo → verde verificado (fase V, ítem V3).
+#
+# Un test nuevo tiene que demostrar que prueba el cambio: con el código de la base
+# (sin el cambio) tiene que fallar, y con el código del PR tiene que pasar. Un test
+# que pasa igual sin el cambio no prueba nada de lo nuevo (el "test espejo", que
+# calcula el valor esperado con la misma lógica que el código, o el test vacío).
+#
+# Cómo: se toman los tests nuevos de Python del PR (funciones test_* y métodos
+# test_* de clases Test*, en archivos nuevos o existentes), se copian los archivos
+# de tests del PR sobre la base y se corren ahí; después se corren sobre el PR.
+#
+#   - Si el PR no cambia código (solo tests, docs o config), no aplica: verde.
+#   - Si un test nuevo pasa contra la base, falla el check, salvo dale humano
+#     (mismo label que la guardia de tests: una persona que no es el autor, después
+#     del último push). Caso legítimo: tests de caracterización sobre código heredado
+#     antes de un refactor.
+#   - Si un test nuevo no pasa con el cambio, falla el check.
+#   - Un test parametrizado cuenta como rojo en la base si falla al menos un caso.
+#
+# Hoy solo mira tests de Python (pytest) dentro de backend-dir.
+# El nombre del job (`rojo-verde`) es parte del contrato (ADR 0002).
+name: rojo-verde
+
+on:
+  workflow_call:
+    inputs:
+      backend-dir:
+        description: Directorio del backend (contiene pyproject.toml y uv.lock).
+        type: string
+        default: backend
+      python-version:
+        description: Versión de Python. Vacío = .python-version del backend, luego el de la raíz, luego 3.12.
+        type: string
+        default: ""
+      postgres:
+        description: Levantar Postgres para los tests y exportar DATABASE_URL.
+        type: boolean
+        default: false
+      postgres-image:
+        description: Imagen del servicio Postgres (solo si postgres es true).
+        type: string
+        default: postgres:17
+      test-paths:
+        description: Patrones (fnmatch, uno por línea, relativos a la raíz) de los archivos que cuentan como tests.
+        type: string
+        default: |
+          tests/*
+          */tests/*
+          test/*
+          */test/*
+          test_*.py
+          */test_*.py
+          *_test.py
+          conftest.py
+          */conftest.py
+      ignore-paths:
+        description: Patrones (fnmatch, uno por línea) de archivos que no cuentan como cambio de código (si el PR solo toca esto y tests, rojo→verde no aplica).
+        type: string
+        default: |
+          *.md
+          docs/*
+          .github/*
+          *.lock
+          *.toml
+          *.yml
+          *.yaml
+          *.json
+          *.txt
+      override-label:
+        description: Label que pone una persona para aceptar tests nuevos que ya pasan en la base (por ejemplo, de caracterización).
+        type: string
+        default: tests-con-dale
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rojo-verde-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.backend-dir }}
+  cancel-in-progress: true
+
+jobs:
+  rojo-verde:
+    name: rojo-verde
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: ${{ inputs.postgres && inputs.postgres-image || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BACKEND_DIR: ${{ inputs.backend-dir }}
+      BASE_DIR: ${{ github.workspace }}/../solbeet-base
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::rojo-verde solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Tests nuevos del PR
+        id: nuevos
+        env:
+          TEST_PATHS: ${{ inputs.test-paths }}
+          IGNORE_PATHS: ${{ inputs.ignore-paths }}
+        shell: python3 {0}
+        run: |
+          """Lista los tests nuevos (ids de pytest relativos a BACKEND_DIR) y decide si aplica."""
+          import ast
+          import fnmatch
+          import os
+          import subprocess
+
+          backend = os.environ["BACKEND_DIR"].strip("/")
+          tests = [p.strip() for p in os.environ["TEST_PATHS"].splitlines() if p.strip()]
+          ignore = [p.strip() for p in os.environ["IGNORE_PATHS"].splitlines() if p.strip()]
+          temp = os.environ["RUNNER_TEMP"]
+
+          def git(*args):
+              return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+
+          def matches(path, pats):
+              return any(fnmatch.fnmatch(path, p) for p in pats)
+
+          def show(rev, path):
+              try:
+                  return git("show", f"{rev}:{path}")
+              except subprocess.CalledProcessError:
+                  return ""
+
+          def test_names(src):
+              try:
+                  tree = ast.parse(src)
+              except SyntaxError:
+                  return set()
+              out = set()
+              for node in tree.body:
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                      out.add(node.name)
+                  elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                      for item in node.body:
+                          if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test"):
+                              out.add(f"{node.name}::{item.name}")
+              return out
+
+          changed = []
+          for line in git("diff", "--name-status", "-M", "HEAD^1", "HEAD").splitlines():
+              parts = line.split("\t")
+              changed.append((parts[0][0], parts[-1], parts[1]))
+
+          codigo = [p for k, p, _ in changed if k != "D" and not matches(p, tests) and not matches(p, ignore)]
+          test_files = [p for k, p, _ in changed if k != "D" and matches(p, tests)]
+          nuevos = []
+          for k, path, old in changed:
+              if k == "D" or not path.endswith(".py") or not matches(path, tests):
+                  continue
+              if not (path == backend or path.startswith(backend + "/")):
+                  continue
+              base_names = test_names(show("HEAD^1", old)) if k in "MR" else set()
+              rel = os.path.relpath(path, backend)
+              for name in sorted(test_names(show("HEAD", path)) - base_names):
+                  nuevos.append(f"{rel}::{name}")
+
+          with open(os.path.join(temp, "nuevos.txt"), "w") as f:
+              f.write("\n".join(nuevos) + ("\n" if nuevos else ""))
+          with open(os.path.join(temp, "archivos-test.txt"), "w") as f:
+              f.write("\n".join(test_files) + ("\n" if test_files else ""))
+          aplica = bool(nuevos) and bool(codigo)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"aplica={'true' if aplica else 'false'}\n")
+          if not nuevos:
+              print("::notice::El PR no agrega tests de Python nuevos: rojo→verde no tiene nada que comprobar.")
+          elif not codigo:
+              print("::notice::El PR solo agrega tests (no cambia código): rojo→verde no aplica.")
+          else:
+              print(f"{len(nuevos)} test(s) nuevo(s) y {len(codigo)} archivo(s) de código cambiado(s):")
+              print("\n".join(nuevos))
+          if not aplica:
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+                  s.write("## Rojo → verde\n\nNo aplica: " + ("no hay tests nuevos de Python." if not nuevos else "el PR no cambia código, solo tests.") + "\n")
+
+      - name: Resolver versión de Python
+        if: steps.nuevos.outputs.aplica == 'true'
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        run: |
+          if [ -n "$INPUT_PYTHON_VERSION" ]; then version="$INPUT_PYTHON_VERSION"
+          elif [ -f .python-version ]; then version="$(head -n 1 .python-version | tr -d '[:space:]')"
+          elif [ -f "$GITHUB_WORKSPACE/.python-version" ]; then version="$(head -n 1 "$GITHUB_WORKSPACE/.python-version" | tr -d '[:space:]')"
+          else version="3.12"; fi
+          echo "UV_PYTHON=$version" >> "$GITHUB_ENV"
+
+      - name: Instalar uv
+        if: steps.nuevos.outputs.aplica == 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-dir }}/uv.lock
+
+      - name: Exportar DATABASE_URL
+        if: steps.nuevos.outputs.aplica == 'true' && inputs.postgres
+        run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test" >> "$GITHUB_ENV"
+
+      - name: Correr los tests nuevos contra la base y contra el PR
+        if: steps.nuevos.outputs.aplica == 'true'
+        run: |
+          # Sin mapfile: el mismo script se prueba con el bash 3.2 de macOS (tests/rojo_verde).
+          ids=()
+          while IFS= read -r l; do [ -n "$l" ] && ids+=("$l"); done < "$RUNNER_TEMP/nuevos.txt"
+          # Base: código de HEAD^1 con los archivos de tests del PR encima.
+          git worktree add --detach "$BASE_DIR" HEAD^1 >/dev/null
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            mkdir -p "$BASE_DIR/$(dirname "$f")"
+            cp "$f" "$BASE_DIR/$f"
+          done < "$RUNNER_TEMP/archivos-test.txt"
+          correr() {  # dir junit
+            # --continue-on-collection-errors: un archivo que no importa en la base
+            # (porque usa código nuevo) cuenta como rojo y no corta el resto.
+            (cd "$1" && uv run --frozen pytest "${ids[@]}" -p no:cacheprovider -o addopts="" -q \
+              --continue-on-collection-errors --junitxml="$2") || true
+          }
+          if [ -f "$BASE_DIR/$BACKEND_DIR/pyproject.toml" ] && (cd "$BASE_DIR/$BACKEND_DIR" && uv sync --frozen); then
+            echo "::group::Tests nuevos contra la base (tienen que fallar)"
+            correr "$BASE_DIR/$BACKEND_DIR" "$RUNNER_TEMP/base.xml"
+            echo "::endgroup::"
+          else
+            echo "::notice::La base no tiene un backend que se pueda instalar: todos los tests nuevos cuentan como rojos en la base."
+          fi
+          (cd "$BACKEND_DIR" && uv sync --frozen)
+          echo "::group::Tests nuevos contra el PR (tienen que pasar)"
+          correr "$BACKEND_DIR" "$RUNNER_TEMP/pr.xml"
+          echo "::endgroup::"
+
+      - name: Veredicto rojo → verde
+        if: steps.nuevos.outputs.aplica == 'true'
+        shell: python3 {0}
+        run: |
+          """Arma la tabla test | base | PR y escribe los problemas en $RUNNER_TEMP/rojo-verde.json."""
+          import json
+          import os
+          import xml.etree.ElementTree as ET
+
+          temp = os.environ["RUNNER_TEMP"]
+          ids = [l.strip() for l in open(os.path.join(temp, "nuevos.txt")) if l.strip()]
+
+          def resultados(path):
+              """{(classname, name): estado} y módulos con error de colección."""
+              casos, rotos = {}, set()
+              try:
+                  root = ET.parse(path).getroot()
+              except (FileNotFoundError, ET.ParseError):
+                  return None, set()
+              for tc in root.iter("testcase"):
+                  cls, name = tc.get("classname", ""), tc.get("name", "")
+                  if tc.find("error") is not None and not cls:
+                      rotos.add(name)  # error de colección: name = módulo con puntos
+                      continue
+                  if tc.find("failure") is not None or tc.find("error") is not None:
+                      estado = "falla"
+                  elif tc.find("skipped") is not None:
+                      estado = "saltea"
+                  else:
+                      estado = "pasa"
+                  casos[(cls, name)] = estado
+              return casos, rotos
+
+          def estado(test_id, casos, rotos):
+              path, _, rest = test_id.partition("::")
+              module = path[:-3].replace("/", ".")
+              parts = rest.split("::")
+              cls = ".".join([module, *parts[:-1]])
+              name = parts[-1]
+              if casos is None:
+                  return "falla"  # no hubo corrida (base sin backend): rojo
+              if module in rotos:
+                  return "falla"
+              vistos = [v for (c, n), v in casos.items() if c == cls and (n == name or n.startswith(name + "["))]
+              if not vistos:
+                  return "no corrió"
+              if "falla" in vistos:
+                  return "falla"
+              return "saltea" if "saltea" in vistos else "pasa"
+
+          base_casos, base_rotos = resultados(os.path.join(temp, "base.xml"))
+          pr_casos, pr_rotos = resultados(os.path.join(temp, "pr.xml"))
+          filas, problemas = [], []
+          for t in ids:
+              b = estado(t, base_casos, base_rotos)
+              p = estado(t, pr_casos or {}, pr_rotos)
+              if p != "pasa":
+                  veredicto = "no pasa con el cambio"
+                  problemas.append({"test": t, "tipo": "pr", "detalle": f"con el cambio: {p}"})
+              elif b == "falla":
+                  veredicto = "ok: rojo → verde"
+              else:
+                  veredicto = "no prueba el cambio: ya pasaba sin él" if b == "pasa" else f"sin rojo en la base ({b})"
+                  problemas.append({"test": t, "tipo": "base", "detalle": f"sin el cambio: {b}"})
+              filas.append((t, b, p, veredicto))
+
+          with open(os.path.join(temp, "rojo-verde.json"), "w") as f:
+              json.dump(problemas, f, ensure_ascii=False)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("## Rojo → verde\n\nCada test nuevo se corre sin el cambio (base) y con el cambio (PR).\n\n")
+              s.write("| Test nuevo | Sin el cambio | Con el cambio | Veredicto |\n|---|---|---|---|\n")
+              for t, b, p, v in filas:
+                  s.write(f"| `{t}` | {b} | {p} | {v} |\n")
+          for t, b, p, v in filas:
+              level = "notice" if v.startswith("ok") else "warning"
+              print(f"::{level}::{t}: sin el cambio {b}, con el cambio {p} ({v})")
+
+      - name: Dale humano para tests que ya pasaban
+        if: steps.nuevos.outputs.aplica == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OVERRIDE_LABEL: ${{ inputs.override-label }}
+          API_URL: ${{ github.api_url }}
+        shell: python3 {0}
+        run: |
+          """Verde si no hay problemas; los tests que ya pasaban en la base aceptan dale humano.
+
+          Un test nuevo que no pasa con el cambio no tiene vía de escape: lo frena
+          igual `ci / backend`. El dale sigue las mismas reglas que guardia-tests.yml.
+          """
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          temp = os.environ["RUNNER_TEMP"]
+          problemas = json.load(open(os.path.join(temp, "rojo-verde.json")))
+          if not problemas:
+              print("Todos los tests nuevos fallan sin el cambio y pasan con él.")
+              sys.exit(0)
+          rotos = [p for p in problemas if p["tipo"] == "pr"]
+          for p in rotos:
+              print(f"::error::{p['test']} no pasa con el cambio ({p['detalle']}).")
+          espejos = [p for p in problemas if p["tipo"] == "base"]
+          summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          if not espejos:
+              sys.exit(1)
+
+          label, author = os.environ["OVERRIDE_LABEL"], os.environ["PR_AUTHOR"]
+
+          def api(path):
+              req = urllib.request.Request(
+                  f"{os.environ['API_URL']}{path}",
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+
+          motivo, ok = None, False
+          try:
+              repo, number, sha = os.environ["REPO"], os.environ["PR_NUMBER"], os.environ["HEAD_SHA"]
+              events, page = [], 1
+              while True:
+                  chunk = api(f"/repos/{repo}/issues/{number}/events?per_page=100&page={page}")
+                  events.extend(chunk)
+                  if len(chunk) < 100:
+                      break
+                  page += 1
+              last = None
+              for e in events:
+                  if e.get("label", {}).get("name") == label:
+                      last = e if e.get("event") == "labeled" else None if e.get("event") == "unlabeled" else last
+              runs = api(f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=100").get("workflow_runs", [])
+              pushed = min((r["created_at"] for r in runs), default=None)
+              if last is None:
+                  motivo = f"nadie puso el label `{label}`"
+              else:
+                  actor = last.get("actor") or {}
+                  login = actor.get("login", "")
+                  if actor.get("type") == "Bot" or login.endswith("[bot]"):
+                      motivo = f"el label lo puso un bot ({login})"
+                  elif login == author:
+                      motivo = f"el label lo puso el autor del PR ({login})"
+                  elif pushed is None or last["created_at"] < pushed:
+                      motivo = "el label es de antes del último push"
+                  else:
+                      ok = True
+                      summary.write(f"\n**Aceptado con dale humano:** {login} puso `{label}` el {last['created_at']}.\n")
+          except Exception as exc:
+              motivo = f"no se pudo consultar la API de GitHub ({exc})"
+
+          if not ok:
+              for p in espejos:
+                  print(f"::error::{p['test']} pasa sin el cambio: no demuestra que prueba lo nuevo ({p['detalle']}).")
+              summary.write(
+                  "\n**Frenado.** Hay tests nuevos que pasan igual sin el cambio, así que no prueban lo que el PR "
+                  "agrega. Si son de caracterización (fijan el comportamiento actual antes de un refactor), una "
+                  f"persona que no sea el autor pone el label `{label}`. Motivo por el que no alcanza hoy: {motivo}.\n"
+              )
+              sys.exit(1)
+          sys.exit(1 if rotos else 0)
