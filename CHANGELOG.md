@@ -2,14 +2,18 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
-## [1.6.0] - 2026-10-13
+## [1.6.0] - 2026-10-14
 
-Sin tag publicado. Va después de 1.5.0 (PR apilado).
+Sin tag publicado: se etiqueta al mergear #14 (`rojo-verde.yml`), que entra después del arreglo de la guardia (#15).
 
 ### Agregado
 
 - `rojo-verde.yml` (fase V, ítem V3, solbeet/workflows#10): job `rojo-verde` que corre los tests nuevos del PR contra la base (tienen que fallar) y contra el PR (tienen que pasar); tabla en el resumen del job; label `tests-con-dale` para tests de caracterización.
 - `examples/rojo-verde.yml` y `tests/rojo_verde/test_rojo_verde.py` (uv y pytest de verdad sobre el fixture, en `selftest / hygiene-logic`).
+
+### Corregido
+
+- `guardia-tests.yml`: los salteos escritos con alias ya no pasan inadvertidos. `from pytest import mark` + `@mark.skip`, `import pytest as pt` + `@pt.mark.skip`, `from pytest import mark as m` + `@m.xfail`, `pytestmark = mark.skip`, `import unittest as ut` + `@ut.skip` y `from pytest import skip as saltar` se resuelven a su nombre completo antes de compararlos (hallazgo H1 del revisor en #13). 7 casos nuevos en `tests/guardia/test_guardia.py` (37 en total).
 
 ## [1.5.0] - 2026-10-13
 
