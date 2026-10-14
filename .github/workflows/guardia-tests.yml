@@ -113,7 +113,8 @@ jobs:
             debilita    un test que existía perdió un assert, un self.assert*/mock.assert_*,
                         un pytest.raises/warns o un caso de @pytest.mark.parametrize, o
                         uno de esos cambió (cambiar el valor esperado cuenta);
-            saltea      un test existente gana skip/xfail, o aparece un salteo a nivel
+            saltea      un test existente gana skip/xfail (también con alias: `from
+                        pytest import mark`, `import pytest as pt`), o aparece un salteo a nivel
                         módulo o en conftest.py (afecta a tests existentes);
             aceptacion  cambia un archivo existente de tests de aceptación.
           Cambiar setup, fixtures, helpers o agregar asserts y tests no es violación.
@@ -157,14 +158,44 @@ jobs:
           def short(node):
               return ast.unparse(node).replace("\n", " ")[:120]
 
-          def skips_in(node):
+          def aliases_of(tree):
+              """{nombre local: nombre completo} de los imports del módulo.
+
+              Cubre `import pytest as pt`, `from pytest import mark`, `from pytest
+              import mark as m` y `from unittest import skip as s`, para que un
+              salteo escrito con un alias se reconozca igual que el nombre completo.
+              """
+              out = {}
+              for n in ast.walk(tree):
+                  if isinstance(n, ast.Import):
+                      for a in n.names:
+                          if a.asname:
+                              out[a.asname] = a.name
+                  elif isinstance(n, ast.ImportFrom) and n.module and not n.level:
+                      for a in n.names:
+                          if a.name != "*":
+                              out[a.asname or a.name] = f"{n.module}.{a.name}"
+              return out
+
+          def canonical(dotted, aliases):
+              """Reemplaza el primer tramo de `a.b.c` por su nombre completo si es un alias."""
+              head, dot, rest = dotted.partition(".")
+              return aliases[head] + dot + rest if head in aliases else dotted
+
+          def skips_in(node, aliases):
               """Salteos reales (atributos, nombres) dentro de un nodo; los strings no cuentan."""
               out = []
               for n in ast.walk(node):
-                  if isinstance(n, ast.Attribute) and SKIP_ATTR.fullmatch(ast.unparse(n)):
-                      out.append(ast.unparse(n))
-                  elif isinstance(n, ast.Name) and n.id in SKIP_NAMES:
-                      out.append(n.id)
+                  if isinstance(n, ast.Attribute):
+                      full = canonical(ast.unparse(n), aliases)
+                      if SKIP_ATTR.fullmatch(full):
+                          out.append(full)
+                  elif isinstance(n, ast.Name):
+                      full = canonical(n.id, aliases)
+                      if full != n.id and SKIP_ATTR.fullmatch(full):
+                          out.append(full)
+                      elif n.id in SKIP_NAMES:
+                          out.append(n.id)
               return out
 
           def profile(fn):
@@ -213,6 +244,7 @@ jobs:
               except SyntaxError:
                   return False
               before, after = tests_of(t_old), tests_of(t_new)
+              al_old, al_new = aliases_of(t_old), aliases_of(t_new)
               for name, fn in before.items():
                   if name not in after:
                       add(path, "borra", f"`{name}` existía en la base y el PR lo saca")
@@ -220,7 +252,7 @@ jobs:
                   lost = profile(fn) - profile(after[name])
                   for check in lost:
                       add(path, "debilita", f"`{name}` pierde o cambia `{check}`")
-                  new_skips = Counter(skips_in(after[name])) - Counter(skips_in(fn))
+                  new_skips = Counter(skips_in(after[name], al_new)) - Counter(skips_in(fn, al_old))
                   for s in new_skips:
                       add(path, "saltea", f"`{name}` (existente) ahora usa `{s}`")
               # Salteos fuera de los tests: a nivel módulo (pytestmark) o en conftest.py.
@@ -235,7 +267,7 @@ jobs:
                       continue  # tests nuevos y helpers: los salteos de tests nuevos los ve rojo-verde
                   if is_new_file and not conftest:
                       continue  # pytestmark en un archivo nuevo solo afecta a tests nuevos
-                  for s in skips_in(node):
+                  for s in skips_in(node, al_new):
                       add(path, "saltea", f"agrega `{s}` fuera de un test (línea {node.lineno}): afecta a tests existentes")
               return True
 
