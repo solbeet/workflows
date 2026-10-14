@@ -2,6 +2,14 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [1.6.0] - 2026-10-14
+
+Sin tag publicado: sale junto con `rojo-verde.yml` (#14).
+
+### Corregido
+
+- `guardia-tests.yml`: los salteos escritos con alias ya no pasan inadvertidos. `from pytest import mark` + `@mark.skip`, `import pytest as pt` + `@pt.mark.skip`, `from pytest import mark as m` + `@m.xfail`, `pytestmark = mark.skip`, `import unittest as ut` + `@ut.skip` y `from pytest import skip as saltar` se resuelven a su nombre completo antes de compararlos (hallazgo H1 del revisor en #13). 7 casos nuevos en `tests/guardia/test_guardia.py` (37 en total).
+
 ## [1.5.0] - 2026-10-13
 
 Sin tag publicado. Va después de 1.4.0 (PR apilado).
