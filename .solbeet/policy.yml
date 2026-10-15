@@ -1,0 +1,77 @@
+# Mapa de peligro de workflows (F3.1, solbeet/solbeet-template#5).
+# Formato y validador: docs/politica.md y scripts/validar_politica.py de solbeet-template.
+#
+# Qué decide: el nivel de riesgo de cada PR (bajo, medio o alto) según los archivos que
+# toca. Rige la versión de la rama principal, nunca la del PR. Auth, pagos, datos
+# personales, migraciones, CI, infra y la propia política son siempre altos aunque no
+# estén acá (piso de Solbeet); las zonas con `categoria` suman a ese piso las rutas
+# propias de este repo. Lo que no está en ninguna zona queda en `nivel_base` (medio).
+# Hoy nada entra solo: el nivel solo se muestra en el PR (check `solbeet / riesgo`).
+#
+# Este repo es el CI de todos los repos de los clientes (workflows reutilizables, públicos,
+# llamados con `@v1`) y los ejemplos que esos repos copian: todo eso es CI y es alto. Bajo
+# queda solo la documentación descriptiva; medio, el fixture con el que se prueba el CI.
+version: 1
+nivel_base: medio
+
+zonas:
+  - id: docs
+    nombre: Documentación
+    descripcion: Arquitectura, desarrollo, estado y changelog
+    nivel: bajo
+    rutas: ["docs/**", "README.md", "CHANGELOG.md"]
+    excluir: ["docs/decisiones/**"]
+
+  - id: decisiones-escritas
+    nombre: Decisiones de arquitectura
+    descripcion: Repo público, contrato de nombres y versionado, escáner de secretos, revisor, licencia, gates y guardia de tests; los ADR entran al registro al mergearse
+    nivel: medio
+    rutas: ["docs/decisiones/**"]
+    autonomia_max: persona
+
+  - id: fixture
+    nombre: Proyecto de prueba del CI
+    descripcion: Backend y frontend mínimos con los que se ejercitan los jobs reutilizables
+    nivel: medio
+    rutas: ["tests/fixture/**"]
+    autonomia_max: persona
+
+  - id: tests-de-gates
+    nombre: Tests de los controles del CI
+    descripcion: Prueban la higiene de PR (secciones obligatorias, secretos), los gates sobre el diff, la guardia de tests y el rojo-verde; aflojar uno deja pasar lo que el CI frena
+    nivel: alto
+    rutas:
+      - "tests/hygiene/**"
+      - "tests/gates/**"
+      - "tests/guardia/**"
+      - "tests/rojo_verde/**"
+
+  - id: ci
+    nombre: Workflows reutilizables y CI de este repo
+    descripcion: Los jobs que corren en todos los repos de los clientes (nombres de check, permisos, escaneo de secretos, revisor con Claude, gates, imágenes); renombrar un job rompe la protección de rama de todos (AGENTS.md)
+    nivel: alto
+    categoria: ci
+    autonomia_max: persona
+    rutas: [".github/**"]
+
+  - id: ejemplos
+    nombre: Workflows que copian los repos de los clientes
+    descripcion: Se copian tal cual a `.github/workflows/` de cada cliente y llaman a los reutilizables
+    nivel: alto
+    categoria: ci
+    autonomia_max: persona
+    rutas: ["examples/**"]
+
+  - id: lint-del-ci
+    nombre: Lint de los workflows
+    descripcion: Descarga actionlint en versión fijada con checksum verificado; cambiar la versión pide confirmación (AGENTS.md)
+    nivel: alto
+    categoria: ci
+    rutas: ["scripts/lint-workflows.sh"]
+
+  - id: politica
+    nombre: Reglas de los agentes
+    descripcion: Esta política y las instrucciones de los agentes
+    nivel: alto
+    categoria: politica
+    rutas: [".solbeet/**", "AGENTS.md", "CLAUDE.md"]
