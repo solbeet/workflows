@@ -6,9 +6,10 @@
 # personales, migraciones, CI, infra y la propia política son siempre altos aunque no
 # estén acá (piso de Solbeet); las zonas con `categoria` suman a ese piso las rutas
 # propias de este repo. Lo que no está en ninguna zona queda en `nivel_base` (medio).
-# Hoy (F3.4, ADR 0037) el PR que no toca una zona alta entra solo en el tenant solbeet cuando
-# el revisor aprueba y los checks pasan; el que toca una zona alta no entra solo y espera la
-# firma. El nivel también se ve en el PR (check `solbeet / riesgo`).
+# Hoy (F3.4, ADR 0037) en el tenant solbeet la plataforma mergea sola el PR que no toca una
+# zona alta cuando el revisor aprueba y los checks pasan; el que toca una zona alta no entra
+# solo y espera la firma. Hoy solo cuenta el nivel alto: nadie lee todavía `autonomia_max`.
+# El nivel también se ve en el PR (check `solbeet / riesgo`).
 #
 # Este repo es el CI de todos los repos de los clientes (workflows reutilizables, públicos,
 # llamados con `@v1`) y los ejemplos que esos repos copian: todo eso es CI y es alto. Bajo
