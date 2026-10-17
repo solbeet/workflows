@@ -97,8 +97,8 @@ def build_cases(inputs: dict[str, dict[str, object]]) -> list[Case]:
     exclude = str(inputs["diff-exclude"]["default"])
     body_step = "Secciones de evidencia en el cuerpo del PR"
 
-    def body_env(body: str, required: str = sections) -> dict[str, str]:
-        return {"PR_BODY": body, "REQUIRED_SECTIONS": required, "REQUIRE_CONTENT": "true"}
+    def body_env(body: str, required: str = sections, author: str = "alguien") -> dict[str, str]:
+        return {"PR_BODY": body, "PR_AUTHOR": author, "REQUIRED_SECTIONS": required, "REQUIRE_CONTENT": "true"}
 
     return [
         Case("cuerpo completo", body_step, True, env=body_env(f"{first}\nCloses #1\n{second}\npytest: 3 passed")),
@@ -114,6 +114,20 @@ def build_cases(inputs: dict[str, dict[str, object]]) -> list[Case]:
             expect_output="está vacía",
         ),
         Case("cuerpo vacío", body_step, False, env=body_env("")),
+        Case(
+            "dependabot sin secciones se exime",
+            body_step,
+            True,
+            env=body_env("Bumps actions/checkout from 6 to 7.", author="dependabot[bot]"),
+            expect_output="dependabot[bot]",
+        ),
+        Case(
+            "otro bot sin secciones sigue fallando",
+            body_step,
+            False,
+            env=body_env("Bumps x.", author="renovate[bot]"),
+            expect_output="Falta la sección",
+        ),
         Case("sin secciones configuradas", body_step, True, env=body_env("", required="")),
         Case(
             "diff grande avisa sin fallar",
