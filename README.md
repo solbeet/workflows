@@ -79,6 +79,7 @@ jobs:
 
 | Input | Tipo | Default | Obligatorio | Descripción |
 |---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) de todos los jobs. Vacío = `ubuntu-latest`. Ver «Elegir dónde corre». |
 | `backend-dir` | string | `backend` | no | Directorio con `pyproject.toml` y `uv.lock`. |
 | `frontend-dir` | string | `frontend` | no | Directorio con `package.json` y `package-lock.json`. Vacío (`""`) = el job `frontend` se saltea. |
 | `python-version` | string | `""` | no | Versión de Python. Vacío = `.python-version` del backend; si no hay, el de la raíz; si no hay, `3.12`. |
@@ -96,6 +97,7 @@ Pasos del job `backend`: `uv sync --frozen` → `ruff check` → `ruff format --
 
 | Input | Tipo | Default | Obligatorio | Descripción |
 |---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) de todos los jobs. Vacío = `ubuntu-latest`. Ver «Elegir dónde corre». |
 | `model` | string | `""` | no | Modelo, se pasa como `--model`. Vacío = el default de la action. |
 | `max-turns` | number | `30` | no | Límite de turnos del agente revisor (acota costo y tiempo). |
 
@@ -112,6 +114,7 @@ El revisor tiene permitido: comentarios inline, `gh pr comment`, `gh pr diff`, `
 
 | Input | Tipo | Default | Obligatorio | Descripción |
 |---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) de todos los jobs. Vacío = `ubuntu-latest`. Ver «Elegir dónde corre». |
 | `required-sections` | string (multilínea) | `## Qué cambia y por qué`<br>`## Evidencia` | no | Encabezados que debe tener el cuerpo del PR, uno por línea. Coinciden con la plantilla de PR de `solbeet-template`. Vacío = no se controla el cuerpo. |
 | `require-section-content` | boolean | `true` | no | Cada sección requerida debe tener texto además del encabezado (los comentarios HTML `<!-- -->` no cuentan). |
 | `max-diff-lines` | number | `400` | no | Si las líneas cambiadas superan este número se emite un aviso (no falla). `0` = sin aviso. |
@@ -139,6 +142,7 @@ Cuatro checks pensados para ser requeridos antes de prender el merge automático
 
 | Input | Tipo | Default | Obligatorio | Descripción |
 |---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) de todos los jobs. Vacío = `ubuntu-latest`. Ver «Elegir dónde corre». |
 | `backend-dir` | string | `backend` | no | Directorio con `pyproject.toml` y `uv.lock`. |
 | `python-version` | string | `""` | no | Igual que en `python-react.yml`. |
 | `postgres` | boolean | `false` | no | Postgres para los tests de `cobertura-cambio` (exporta `DATABASE_URL`). `migraciones` y `contrato` lo levantan siempre. |
@@ -169,6 +173,7 @@ Un agente que no logra pasar un test tiende a cambiar el test (ImpossibleBench, 
 
 | Input | Tipo | Default | Obligatorio | Descripción |
 |---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) de todos los jobs. Vacío = `ubuntu-latest`. Ver «Elegir dónde corre». |
 | `test-paths` | string (multilínea) | `tests/*`, `*/tests/*`, `test_*.py`, `conftest.py`, `*.test.*`, `*.spec.*`, … | no | Patrones fnmatch de archivos de tests. |
 | `acceptance-dir` | string | `tests/aceptacion` | no | Carpeta de tests de aceptación (en cualquier nivel). |
 | `override-label` | string | `tests-con-dale` | no | Label del dale humano. |
@@ -193,6 +198,7 @@ Un test nuevo tiene que demostrar que prueba el cambio: con el código de la bas
 
 | Input | Tipo | Default | Obligatorio | Descripción |
 |---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) de todos los jobs. Vacío = `ubuntu-latest`. Ver «Elegir dónde corre». |
 | `backend-dir` | string | `backend` | no | Directorio con `pyproject.toml` y `uv.lock`. |
 | `python-version` | string | `""` | no | Igual que en `python-react.yml`. |
 | `postgres` | boolean | `false` | no | Postgres para los tests (exporta `DATABASE_URL`). |
