@@ -119,6 +119,8 @@ El revisor tiene permitido: comentarios inline, `gh pr comment`, `gh pr diff`, `
 
 Secretos: ninguno. Outputs: ninguno. Permisos: `contents: read`.
 
+Los PRs cuyo autor es `dependabot[bot]` quedan eximidos solo de la exigencia de secciones en el cuerpo (Dependabot genera el cuerpo y no las trae). El resto de los controles, incluido `secret-scan`, aplica igual.
+
 Qué falla y qué avisa:
 
 | Control | Job | Resultado |

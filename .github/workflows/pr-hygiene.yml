@@ -72,6 +72,7 @@ jobs:
           # El cuerpo entra por variable de entorno, nunca interpolado en el script,
           # para que el autor del PR no pueda inyectar comandos.
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           REQUIRED_SECTIONS: ${{ inputs.required-sections }}
           REQUIRE_CONTENT: ${{ inputs.require-section-content }}
         shell: python3 {0}
@@ -82,6 +83,10 @@ jobs:
           costados, empieza con el texto requerido (sin distinguir mayúsculas).
           Con REQUIRE_CONTENT, el texto hasta el siguiente encabezado markdown
           no puede estar vacío ni ser solo comentarios HTML de la plantilla.
+
+          Los PRs de dependabot[bot] se eximen de esta exigencia: el cuerpo lo
+          genera Dependabot y no trae estas secciones. El escaneo de secretos y
+          los demás controles siguen aplicando.
           """
           import os
           import re
@@ -93,6 +98,10 @@ jobs:
 
           if not required:
               print("Sin secciones requeridas configuradas: no se controla el cuerpo.")
+              sys.exit(0)
+
+          if os.environ.get("PR_AUTHOR", "") == "dependabot[bot]":
+              print("PR de dependabot[bot]: no se exigen secciones en el cuerpo.")
               sys.exit(0)
 
           lines = body.split("\n")
