@@ -8,6 +8,10 @@ name: python-react
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner (label de runs-on) donde corren los jobs. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
       backend-dir:
         description: Directorio del backend (contiene pyproject.toml y uv.lock).
         type: string
@@ -51,7 +55,7 @@ concurrency:
 jobs:
   backend:
     name: backend
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     defaults:
       run:
@@ -129,7 +133,7 @@ jobs:
   frontend:
     name: frontend
     if: inputs.frontend-dir != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     defaults:
       run:

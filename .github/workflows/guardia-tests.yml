@@ -32,6 +32,10 @@ name: guardia-tests
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner (label de runs-on) donde corren los jobs. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
       test-paths:
         description: Patrones (fnmatch, uno por línea) de los archivos que cuentan como tests.
         type: string
@@ -71,7 +75,7 @@ concurrency:
 jobs:
   tests:
     name: tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 10
     # Lectura de los eventos del PR (quién puso el label y cuándo) y de las corridas
     # del commit (cuándo llegó el último push). No escribe nada.

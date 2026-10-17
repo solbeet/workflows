@@ -90,6 +90,8 @@ jobs:
     # Ejercita el servicio Postgres y el salteo del job frontend con frontend-dir vacío.
     uses: ./.github/workflows/python-react.yml
     with:
+      # Un runner distinto del default prueba que el input `runner` se respeta.
+      runner: ubuntu-24.04
       backend-dir: tests/fixture/backend
       frontend-dir: ""
       postgres: true

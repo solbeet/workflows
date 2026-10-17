@@ -25,6 +25,10 @@ name: gates
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner (label de runs-on) donde corren los jobs. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
       backend-dir:
         description: Directorio del backend (contiene pyproject.toml y uv.lock).
         type: string
@@ -106,7 +110,7 @@ env:
 jobs:
   cobertura-cambio:
     name: cobertura-cambio
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     defaults:
       run:
@@ -215,7 +219,7 @@ jobs:
 
   migraciones:
     name: migraciones
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 20
     outputs:
       # true si alguna migración nueva tiene una operación de las reglas que frenan
@@ -531,7 +535,7 @@ jobs:
 
   contrato:
     name: contrato
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -781,7 +785,7 @@ jobs:
 
   dependencias:
     name: dependencias
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 10
     defaults:
       run:

@@ -2,6 +2,10 @@
 
 Última actualización: 2026-10-13 · Sin publicar: v1.4.0 (`gates.yml`, V1) v1.5.0 (`guardia-tests.yml`, V2) y v1.6.0 (`rojo-verde.yml`, V3); ver abajo. Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
 
+## v1.7.0 (sin publicar): input `runner` (C3)
+
+Los siete workflows reutilizables aceptan `runner` (default `ubuntu-latest`). Verificado: actionlint sin hallazgos y casos de `pr-hygiene` en verde en local; `selftest / ci-postgres` corre con `runner: ubuntu-24.04` y el resto con el default. No verificado: ejecución en un scale set propio (todavía no existe).
+
 ## v1.6.0 (sin publicar): `rojo-verde.yml`
 
 | Qué | Cómo | Resultado |

@@ -211,6 +211,25 @@ Cómo funciona: lista los tests nuevos del PR (funciones `test*` y métodos `tes
 
 Hoy solo Python (pytest) dentro de `backend-dir`; un parametrizado cuenta como rojo en la base si falla al menos un caso.
 
+## Elegir dónde corre (`runner`)
+
+Todos los workflows reutilizables aceptan el input `runner` (string, default `ubuntu-latest`): es el label que usan sus jobs en `runs-on`. Los nombres de los jobs y de los checks no dependen del runner, así que cambiarlo no toca los rulesets.
+
+La forma recomendada es fijarlo con una variable de la organización (`SOLBEET_RUNNER`) y pasarla en cada caller. Con la variable sin definir (o vacía) corre en el runner hosted de siempre:
+
+```yaml
+jobs:
+  ci:
+    uses: solbeet/workflows/.github/workflows/python-react.yml@v1
+    with:
+      runner: ${{ vars.SOLBEET_RUNNER || 'ubuntu-latest' }}
+```
+
+- Pasar al scale set propio: definir `SOLBEET_RUNNER` con el nombre del scale set. Volver a hosted: borrar la variable o ponerle `ubuntu-latest`. No hay que tocar ningún repo.
+- Un input sirve para todos los jobs del workflow (por ejemplo `backend` y `frontend` de `python-react.yml`).
+- Advertencia: no usar runners self-hosted en repos públicos que reciban PRs de forks. Un PR de un fork ejecuta código ajeno en el runner. En esos repos dejar `ubuntu-latest`.
+- El runner propio tiene que traer lo que el job espera (Docker para `imagen.yml`, `python3`, `git`, `curl`); los workflows no lo instalan.
+
 ## Checks requeridos
 
 Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que llama> / <job del reutilizable>`. Con los ejemplos de `examples/` quedan:
