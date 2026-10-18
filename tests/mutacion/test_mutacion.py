@@ -240,6 +240,9 @@ def main() -> int:
             }
             output, code = "", 0
             for repeticion in range(2 if case.segunda_corrida else 1):
+                if repeticion:
+                    # Un runner nuevo por corrida: sin el setup.cfg ni mutants/ de la anterior.
+                    git(repo, "clean", "-fdxq")
                 for name in order:
                     if name != order[0] and "aplica=false" in pathlib.Path(env["GITHUB_OUTPUT"]).read_text():
                         break
