@@ -78,11 +78,13 @@ jobs:
     outputs:
       nativo: ${{ steps.plan.outputs.nativo }}
       matriz: ${{ steps.plan.outputs.matriz }}
+      digests: ${{ steps.plan.outputs.digests }}
     steps:
       - name: Plan de construcción
         id: plan
         env:
           PLATAFORMAS: ${{ inputs.plataformas }}
+          IMAGEN: ${{ inputs.imagen }}
           RUNNER: ${{ inputs.runner }}
           RUNNER_AMD64: ${{ inputs.runner-amd64 }}
           RUNNER_ARM64: ${{ inputs.runner-arm64 }}
@@ -115,10 +117,16 @@ jobs:
           nativo = len(plataformas) >= 2 and len(matriz) == len(plataformas)
           if not nativo:
               matriz = []
+          # Nombres exactos de los artifacts de digests que sube `construir`. Un pattern
+          # `digests-<imagen>-*` también casaría con otra imagen que empiece igual (`app` y
+          # `app-web`), por eso se bajan por nombre, en un grupo de llaves.
+          nombres = [f"digests-{os.environ['IMAGEN']}-{m['par']}" for m in matriz]
+          digests = "{" + ",".join(nombres) + "}" if nombres else ""
           print(f"Modo: {'nativo por arquitectura' if nativo else 'QEMU en un solo runner'}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as salida:
               salida.write(f"nativo={'true' if nativo else 'false'}\n")
               salida.write(f"matriz={json.dumps(matriz, separators=(',', ':'))}\n")
+              salida.write(f"digests={digests}\n")
 
   # Modo nativo: una construcción por arquitectura, publicada por digest (sin tags).
   construir:
@@ -256,7 +264,9 @@ jobs:
         if: ${{ needs.plan.outputs.nativo == 'true' && inputs.publicar }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: digests-${{ inputs.imagen }}-*
+          # Nombres exactos de la matriz (job `plan`), no `digests-<imagen>-*`: ese pattern
+          # también casa con otra imagen cuyo nombre empiece igual.
+          pattern: ${{ needs.plan.outputs.digests }}
           merge-multiple: true
           path: ${{ runner.temp }}/digests
       - name: Publicar índice multi-arch
@@ -265,7 +275,15 @@ jobs:
           IMAGEN: ghcr.io/${{ github.repository_owner }}/${{ inputs.imagen }}
           META_JSON: ${{ steps.meta.outputs.json }}
           DIGESTS: ${{ runner.temp }}/digests
+          ESPERADOS: ${{ join(fromJSON(needs.plan.outputs.matriz).*.par, ' ') }}
         run: |
+          # Un digest por plataforma de la matriz: ni uno de más (otra imagen) ni uno de menos.
+          bajados=$(find "$DIGESTS" -type f | wc -l)
+          read -r -a esperados <<< "$ESPERADOS"
+          if [ "$bajados" -ne "${#esperados[@]}" ]; then
+            echo "::error::Se esperaban ${#esperados[@]} digests y se bajaron $bajados"
+            exit 1
+          fi
           # Mismos tags y anotaciones (nivel índice) que en el modo QEMU.
           args=()
           while IFS= read -r tag; do args+=(--tag "$tag"); done < <(jq -r '.tags[]' <<< "$META_JSON")
