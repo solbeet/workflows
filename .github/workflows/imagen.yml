@@ -17,6 +17,10 @@ name: imagen
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner (label de runs-on) donde corren los jobs. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
       imagen:
         description: Nombre de la imagen sin registry ni tag (por ejemplo solbeet-plataforma-api).
         type: string
@@ -51,7 +55,7 @@ permissions:
 jobs:
   imagen:
     name: imagen
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 45
     permissions:
       contents: read

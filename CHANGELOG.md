@@ -2,6 +2,15 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [1.7.0] - sin publicar
+
+Sin tag publicado: se etiqueta al mergear.
+
+### Agregado
+
+- Input `runner` (string, default `ubuntu-latest`) en `python-react.yml`, `pr-hygiene.yml`, `claude-review.yml`, `gates.yml`, `guardia-tests.yml`, `rojo-verde.yml` e `imagen.yml` (fase C, ítem C3, solbeet/workflows#21). Sin pasarlo, el comportamiento es el de v1.6.0; los nombres de jobs y checks no cambian. Vacío cae a `ubuntu-latest`. Ver README, «Elegir dónde corre».
+- `selftest.yml` llama a `ci-postgres` con `runner: ubuntu-24.04` para probar un valor distinto del default.
+
 ## [1.6.0] - 2026-10-14
 
 Sin tag publicado: se etiqueta al mergear #14 (`rojo-verde.yml`), que entra después del arreglo de la guardia (#15).

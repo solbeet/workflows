@@ -24,6 +24,10 @@ name: rojo-verde
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner (label de runs-on) donde corren los jobs. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
       backend-dir:
         description: Directorio del backend (contiene pyproject.toml y uv.lock).
         type: string
@@ -81,7 +85,7 @@ concurrency:
 jobs:
   rojo-verde:
     name: rojo-verde
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read

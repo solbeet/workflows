@@ -9,6 +9,10 @@ name: claude-review
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner (label de runs-on) donde corren los jobs. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
       model:
         description: Modelo a usar (se pasa como --model). Vacío = el modelo por defecto de la action.
         type: string
@@ -38,7 +42,7 @@ jobs:
     name: review
     # Solo PRs que no sean borrador. Los borradores se revisan al pasar a "ready for review".
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
