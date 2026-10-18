@@ -8,6 +8,8 @@ Sin tag publicado: se etiqueta al mergear.
 
 ### Agregado
 
+- `imagen.yml`: construcción nativa por arquitectura (fase C, ítem C4, solbeet/workflows#22). Inputs `runner-amd64` y `runner-arm64`; con runner para cada plataforma, cada una se construye en el suyo y el índice multi-arch se arma con `docker buildx imagetools create`. Sin `runner-arm64` sigue QEMU como en v1.6.0. El job que ven los callers (`imagen`), los tags y las anotaciones no cambian. Jobs nuevos: `plan` y `construir (linux-<arq>)`.
+- `tests/imagen/test_imagen_plan.py` (9 casos de la decisión nativo/QEMU, en `selftest / hygiene-logic`).
 - Input `runner` (string, default `ubuntu-latest`) en `python-react.yml`, `pr-hygiene.yml`, `claude-review.yml`, `gates.yml`, `guardia-tests.yml`, `rojo-verde.yml` e `imagen.yml` (fase C, ítem C3, solbeet/workflows#21). Sin pasarlo, el comportamiento es el de v1.6.0; los nombres de jobs y checks no cambian. Vacío cae a `ubuntu-latest`. Ver README, «Elegir dónde corre».
 - `selftest.yml` llama a `ci-postgres` con `runner: ubuntu-24.04` para probar un valor distinto del default.
 

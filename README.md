@@ -15,7 +15,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`python-react.yml`](.github/workflows/python-react.yml) | CI de backend Python con uv (ruff, pyright, pytest) y frontend Node con npm (lint, typecheck, test, build) | `backend`, `frontend` |
 | [`claude-review.yml`](.github/workflows/claude-review.yml) | Revisor independiente de PRs con `anthropics/claude-code-action`: spec, tests, bugs y seguridad, evidencia. Deja comentarios inline y un resumen con veredicto | `review` |
 | [`pr-hygiene.yml`](.github/workflows/pr-hygiene.yml) | Secciones de evidencia en el cuerpo del PR, aviso por diff grande, archivos `.rej`, marcadores de conflicto y escaneo de secretos con gitleaks | `hygiene`, `secret-scan` |
-| [`imagen.yml`](.github/workflows/imagen.yml) | Construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` con tag = versión semver sin `v` y `sha-<sha7>` (sin `latest`); el sha completo va como label y anotación `org.opencontainers.image.revision` (outputs `tag` y `revision`). Usa el `GITHUB_TOKEN` con `packages: write` | `imagen` (no es check requerido) |
+| [`imagen.yml`](.github/workflows/imagen.yml) | Construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` con tag = versión semver sin `v` y `sha-<sha7>` (sin `latest`); el sha completo va como label y anotación `org.opencontainers.image.revision` (outputs `tag` y `revision`). Construye con QEMU en un runner o, con `runner-arm64`, cada arquitectura en su runner nativo. Usa el `GITHUB_TOKEN` con `packages: write` | `imagen` (no es check requerido) |
 | [`gates.yml`](.github/workflows/gates.yml) | Gates sobre el diff del PR (fase V): cobertura de las líneas cambiadas, migraciones (pytest-alembic + squawk), contrato de la API (Schemathesis) y dependencias vulnerables (OSV-Scanner). Solo frena lo que introduce el PR | `cobertura-cambio`, `migraciones`, `contrato`, `dependencias` |
 | [`guardia-tests.yml`](.github/workflows/guardia-tests.yml) | Guardia de tests (fase V): frena el PR que borra, debilita o saltea tests existentes, o toca tests de aceptación, salvo dale de una persona (label) | `tests` |
 | [`rojo-verde.yml`](.github/workflows/rojo-verde.yml) | Rojo → verde (fase V): cada test nuevo de Python tiene que fallar sin el cambio y pasar con él | `rojo-verde` |
@@ -218,6 +218,26 @@ Cómo funciona: lista los tests nuevos del PR (funciones `test*` y métodos `tes
 | un test nuevo no pasa con el cambio | rojo, sin vía de escape |
 
 Hoy solo Python (pytest) dentro de `backend-dir`; un parametrizado cuenta como rojo en la base si falla al menos un caso.
+
+### `imagen.yml`
+
+| Input | Tipo | Default | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner de los jobs (ver «Elegir dónde corre»). |
+| `imagen` | string | — | sí | Nombre de la imagen sin registry ni tag. |
+| `contexto` | string | `backend` | no | Directorio de contexto del build. |
+| `dockerfile` | string | `""` | no | Ruta del Dockerfile. Vacío = `<contexto>/Dockerfile`. |
+| `plataformas` | string | `linux/amd64,linux/arm64` | no | Plataformas, separadas por coma. |
+| `runner-amd64` | string | `""` | no | Runner para construir `linux/amd64` nativo. Vacío = el input `runner`. |
+| `runner-arm64` | string | `""` | no | Runner arm64 para construir `linux/arm64` nativo. Vacío = QEMU. |
+| `publicar` | boolean | `true` | no | `false` = solo construye (prueba del Dockerfile en un PR). |
+
+Dos modos, con el mismo job `imagen`, los mismos tags (`X.Y.Z` y `sha-<sha7>`, nunca `latest`) y las mismas anotaciones de revisión:
+
+- **QEMU** (default, el de siempre): un solo runner construye todas las plataformas. Es lo que pasa si `runner-arm64` está vacío, si hay una sola plataforma o si alguna plataforma no tiene runner.
+- **Nativo**: con más de una plataforma y un runner para cada una, el job `construir (linux-<arq>)` corre en cada runner, publica la imagen por digest y `imagen` arma el índice multi-arch con `docker buildx imagetools create`. Si una construcción falla, el rojo queda en `construir` y `imagen` se saltea. Con `publicar: false` solo corren las construcciones.
+
+Pasar al modo nativo es agregar `runner-arm64: ${{ vars.SOLBEET_RUNNER_ARM64 }}` en el caller (variable vacía = QEMU); volver es vaciar la variable. El runner arm64 tiene que traer Docker.
 
 ## Elegir dónde corre (`runner`)
 

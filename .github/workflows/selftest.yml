@@ -69,6 +69,9 @@ jobs:
       - name: Casos de pr-hygiene
         run: uv run --no-project --with pyyaml==6.0.2 python tests/hygiene/test_pr_hygiene.py
 
+      - name: Casos del plan de imagen (nativo por arquitectura o QEMU)
+        run: uv run --no-project --with pyyaml==6.0.2 python tests/imagen/test_imagen_plan.py
+
       - name: Casos de gates (veredictos de squawk, contrato y dependencias)
         run: uv run --no-project --with pyyaml==6.0.2 python tests/gates/test_gates.py
 

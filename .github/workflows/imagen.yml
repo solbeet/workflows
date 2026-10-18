@@ -12,6 +12,14 @@
 # GitHub (ADR 0002 de la fábrica). Outputs `tag` y `revision` para el caller. El
 # deploy a staging lo hace solbeet-run al ver esta suite en verde en main
 # (contrato v5 «Deploy por ambientes»).
+#
+# Dos modos de construcción (el job que ven los callers, `imagen`, es el mismo):
+# - QEMU (default): un solo runner construye todas las plataformas.
+# - Nativo: si hay más de una plataforma y cada una tiene runner (`runner-arm64`
+#   para arm64; amd64 usa `runner-amd64` o `runner`), cada arquitectura se
+#   construye en su runner (job `construir`), se publica por digest y el job
+#   `imagen` arma el índice multi-arch con `docker buildx imagetools create`.
+#   Mismos tags y mismas anotaciones que en el modo QEMU.
 name: imagen
 
 on:
@@ -37,6 +45,14 @@ on:
         description: Plataformas del build, separadas por coma.
         type: string
         default: linux/amd64,linux/arm64
+      runner-amd64:
+        description: Runner (label de runs-on) para construir linux/amd64 nativo. Vacío = el input runner.
+        type: string
+        default: ""
+      runner-arm64:
+        description: Runner (label de runs-on) con arquitectura arm64 para construir linux/arm64 nativo. Vacío = se construye todo en un solo runner con QEMU, como antes.
+        type: string
+        default: ""
       publicar:
         description: false = solo construye (sirve para probar el Dockerfile en un PR).
         type: boolean
@@ -53,26 +69,75 @@ permissions:
   contents: read
 
 jobs:
-  imagen:
-    name: imagen
+  # Decide el modo y arma la matriz de construcción nativa. La lógica está probada
+  # en tests/imagen/test_imagen_plan.py.
+  plan:
+    name: plan
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      nativo: ${{ steps.plan.outputs.nativo }}
+      matriz: ${{ steps.plan.outputs.matriz }}
+    steps:
+      - name: Plan de construcción
+        id: plan
+        env:
+          PLATAFORMAS: ${{ inputs.plataformas }}
+          RUNNER: ${{ inputs.runner }}
+          RUNNER_AMD64: ${{ inputs.runner-amd64 }}
+          RUNNER_ARM64: ${{ inputs.runner-arm64 }}
+        shell: python3 {0}
+        run: |
+          """Elige entre construcción nativa por arquitectura y QEMU.
+
+          Nativo solo si hay al menos dos plataformas y todas tienen runner:
+          amd64 usa RUNNER_AMD64 o RUNNER (o ubuntu-latest), arm64 exige
+          RUNNER_ARM64. Cualquier otra arquitectura sin runner propio hace
+          caer todo a QEMU, que es el comportamiento de v1.6.0.
+          """
+          import json
+          import os
+
+          plataformas = [p.strip() for p in os.environ["PLATAFORMAS"].split(",") if p.strip()]
+          base = os.environ.get("RUNNER", "").strip() or "ubuntu-latest"
+          runners = {
+              "amd64": os.environ.get("RUNNER_AMD64", "").strip() or base,
+              "arm64": os.environ.get("RUNNER_ARM64", "").strip(),
+          }
+          matriz = []
+          for plataforma in plataformas:
+              arq = plataforma.split("/")[-1]
+              runner = runners.get(arq, "")
+              if not runner:
+                  matriz = []
+                  break
+              matriz.append({"plataforma": plataforma, "par": plataforma.replace("/", "-"), "runner": runner})
+          nativo = len(plataformas) >= 2 and len(matriz) == len(plataformas)
+          if not nativo:
+              matriz = []
+          print(f"Modo: {'nativo por arquitectura' if nativo else 'QEMU en un solo runner'}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as salida:
+              salida.write(f"nativo={'true' if nativo else 'false'}\n")
+              salida.write(f"matriz={json.dumps(matriz, separators=(',', ':'))}\n")
+
+  # Modo nativo: una construcción por arquitectura, publicada por digest (sin tags).
+  construir:
+    name: construir (${{ matrix.par }})
+    needs: plan
+    if: ${{ needs.plan.outputs.nativo == 'true' }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write
-    outputs:
-      tag: sha-${{ steps.revision.outputs.corto }}
-      revision: ${{ github.sha }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matriz) }}
     steps:
-      - name: Revisión
-        id: revision
-        run: echo "corto=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # QEMU permite construir linux/arm64 en el runner x86 (los servidores pueden ser ARM o x86).
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        if: contains(inputs.plataformas, 'arm64')
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Login a ghcr.io
         if: inputs.publicar
@@ -85,10 +150,87 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         env:
+          # Cada manifiesto lleva sus anotaciones (incluida la revisión completa);
+          # las del índice las agrega el job `imagen` al armarlo.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ inputs.imagen }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-,format=short
+      - name: Build y push por digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.contexto }}
+          file: ${{ inputs.dockerfile != '' && inputs.dockerfile || format('{0}/Dockerfile', inputs.contexto) }}
+          platforms: ${{ matrix.plataforma }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/${{ inputs.imagen }},push-by-digest=true,name-canonical=true,push=${{ inputs.publicar }}
+          provenance: false
+      - name: Guardar digest
+        if: inputs.publicar
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - name: Subir digest
+        if: inputs.publicar
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # El nombre lleva la imagen: dos llamadas en la misma corrida (api y web) comparten el espacio de artifacts.
+          name: digests-${{ inputs.imagen }}-${{ matrix.par }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  imagen:
+    name: imagen
+    needs: [plan, construir]
+    # En modo QEMU `construir` se saltea; si falla, el rojo queda en ese job.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.construir.result != 'failure' }}
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: sha-${{ steps.revision.outputs.corto }}
+      revision: ${{ github.sha }}
+    steps:
+      - name: Revisión
+        id: revision
+        run: echo "corto=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      # --- Modo QEMU (sin runner nativo para alguna plataforma): construye todo acá. ---
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.plan.outputs.nativo != 'true'
+        with:
+          persist-credentials: false
+      # QEMU permite construir linux/arm64 en el runner x86 (los servidores pueden ser ARM o x86).
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: needs.plan.outputs.nativo != 'true' && contains(inputs.plataformas, 'arm64')
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: ${{ needs.plan.outputs.nativo != 'true' || inputs.publicar }}
+      - name: Login a ghcr.io
+        if: ${{ inputs.publicar }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags y labels
+        id: meta
+        if: ${{ needs.plan.outputs.nativo != 'true' || inputs.publicar }}
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
           # Anotaciones (incluida org.opencontainers.image.revision) en cada manifiesto y en el
           # índice multi-arch: así `docker buildx imagetools inspect` del tag muestra el sha
           # completo sin bajar la config de una plataforma.
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: ${{ needs.plan.outputs.nativo == 'true' && 'index' || 'manifest,index' }}
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ inputs.imagen }}
           flavor: |
@@ -97,6 +239,7 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,prefix=sha-,format=short
       - name: Build y push
+        if: needs.plan.outputs.nativo != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ inputs.contexto }}
@@ -107,3 +250,32 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           provenance: false
+
+      # --- Modo nativo: arma el índice multi-arch con los digests de `construir`. ---
+      - name: Bajar digests
+        if: ${{ needs.plan.outputs.nativo == 'true' && inputs.publicar }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-${{ inputs.imagen }}-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - name: Publicar índice multi-arch
+        if: ${{ needs.plan.outputs.nativo == 'true' && inputs.publicar }}
+        env:
+          IMAGEN: ghcr.io/${{ github.repository_owner }}/${{ inputs.imagen }}
+          META_JSON: ${{ steps.meta.outputs.json }}
+          DIGESTS: ${{ runner.temp }}/digests
+        run: |
+          # Mismos tags y anotaciones (nivel índice) que en el modo QEMU.
+          args=()
+          while IFS= read -r tag; do args+=(--tag "$tag"); done < <(jq -r '.tags[]' <<< "$META_JSON")
+          while IFS= read -r nota; do args+=(--annotation "$nota"); done < <(jq -r '.annotations[]' <<< "$META_JSON")
+          fuentes=()
+          for f in "$DIGESTS"/*; do fuentes+=("$IMAGEN@sha256:$(basename "$f")"); done
+          docker buildx imagetools create "${args[@]}" "${fuentes[@]}"
+      - name: Verificar índice
+        if: ${{ needs.plan.outputs.nativo == 'true' && inputs.publicar }}
+        env:
+          IMAGEN: ghcr.io/${{ github.repository_owner }}/${{ inputs.imagen }}
+          TAG: sha-${{ steps.revision.outputs.corto }}
+        run: docker buildx imagetools inspect "$IMAGEN:$TAG"
