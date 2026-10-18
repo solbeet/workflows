@@ -17,9 +17,9 @@ import fnmatch
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
-import re
 import tempfile
 from dataclasses import dataclass
 
