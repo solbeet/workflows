@@ -13,9 +13,11 @@ Sale con código 0 si todos los casos dan el resultado esperado y 1 si no.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -36,6 +38,7 @@ class Case:
     runner: str = ""
     runner_amd64: str = ""
     runner_arm64: str = ""
+    imagen: str = "app"
     nativo: bool = False
     runners: tuple[str, ...] = ()
 
@@ -59,6 +62,7 @@ def run_plan(step: dict[str, object], case: Case) -> dict[str, str]:
         env = {
             **os.environ,
             "PLATAFORMAS": case.plataformas,
+            "IMAGEN": case.imagen,
             "RUNNER": case.runner,
             "RUNNER_AMD64": case.runner_amd64,
             "RUNNER_ARM64": case.runner_arm64,
@@ -67,6 +71,39 @@ def run_plan(step: dict[str, object], case: Case) -> dict[str, str]:
         subprocess.run([sys.executable, "-c", str(step["run"])], env=env, check=True, capture_output=True, text=True)
         pares = (linea.split("=", 1) for linea in salida.read().splitlines() if "=" in linea)
         return dict(pares)
+
+
+def expandir_llaves(patron: str) -> list[str]:
+    """Expande un grupo de llaves `a-{x,y}` como lo hace minimatch (un solo nivel)."""
+    m = re.fullmatch(r"(.*)\{([^{}]*)\}(.*)", patron)
+    if not m:
+        return [patron]
+    return [m[1] + opcion + m[3] for opcion in m[2].split(",")]
+
+
+def casa(patron: str, nombre: str) -> bool:
+    """True si el artifact `nombre` lo bajaría download-artifact con `patron`."""
+    return any(fnmatch.fnmatchcase(nombre, p) for p in expandir_llaves(patron))
+
+
+def probar_digests(step: dict[str, object]) -> int:
+    """El pattern de digests no puede casar con los artifacts de otra imagen de nombre parecido."""
+    fallas = 0
+    for imagen, otra in (("app", "app-web"), ("app", "app-linux"), ("app-web", "app")):
+        out = run_plan(step, Case("colisión", BOTH, runner_arm64="arm", imagen=imagen))
+        patron = out["digests"]
+        propios = [f"digests-{imagen}-linux-amd64", f"digests-{imagen}-linux-arm64"]
+        ajenos = [f"digests-{otra}-linux-amd64", f"digests-{otra}-linux-arm64"]
+        ok = all(casa(patron, n) for n in propios) and not any(casa(patron, n) for n in ajenos)
+        # El pattern viejo (`digests-<imagen>-*`) casaba con la otra imagen: el caso tiene que poder fallar.
+        viejo_casa_ajenos = any(fnmatch.fnmatchcase(n, f"digests-{imagen}-*") for n in ajenos)
+        fallas += not ok
+        print(f"{'OK   ' if ok else 'FALLA'} digests de {imagen} sin pisar a {otra}: {patron} (pattern viejo casaba con la ajena: {viejo_casa_ajenos})")
+    qemu = run_plan(step, Case("qemu", BOTH))
+    ok = qemu["digests"] == ""
+    fallas += not ok
+    print(f"{'OK   ' if ok else 'FALLA'} modo QEMU: sin pattern de digests")
+    return fallas
 
 
 def main() -> int:
@@ -87,6 +124,7 @@ def main() -> int:
             ok = ok and all(m["par"] == m["plataforma"].replace("/", "-") for m in matriz)
         fallas += not ok
         print(f"{'OK   ' if ok else 'FALLA'} {case.name}: nativo={out['nativo']} matriz={out['matriz']}")
+    fallas += probar_digests(step)
     print(f"\n{fallas} caso(s) con resultado inesperado." if fallas else "\nTodos los casos OK.")
     return 1 if fallas else 0
 

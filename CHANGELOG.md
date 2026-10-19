@@ -13,6 +13,10 @@ Sin tag publicado: se etiqueta al mergear.
 - Input `runner` (string, default `ubuntu-latest`) en `python-react.yml`, `pr-hygiene.yml`, `claude-review.yml`, `gates.yml`, `guardia-tests.yml`, `rojo-verde.yml` e `imagen.yml` (fase C, ítem C3, solbeet/workflows#21). Sin pasarlo, el comportamiento es el de v1.6.0; los nombres de jobs y checks no cambian. Vacío cae a `ubuntu-latest`. Ver README, «Elegir dónde corre».
 - `selftest.yml` llama a `ci-postgres` con `runner: ubuntu-24.04` para probar un valor distinto del default.
 
+### Corregido
+
+- `imagen.yml`: en modo nativo, los digests se bajan por nombre exacto (`digests-<imagen>-linux-amd64`, `digests-<imagen>-linux-arm64`, armados por el job `plan` desde la matriz) y no con `digests-<imagen>-*`, que también casaba con los de otra imagen cuyo nombre empiece igual (`app` y `app-web`) y metía digests ajenos en el índice. Además el paso que arma el índice verifica que se bajó un digest por plataforma. Casos nuevos en `tests/imagen/test_imagen_plan.py`.
+
 ## [1.6.0] - 2026-10-14
 
 Sin tag publicado: se etiqueta al mergear #14 (`rojo-verde.yml`), que entra después del arreglo de la guardia (#15).
