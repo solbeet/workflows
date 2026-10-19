@@ -41,13 +41,14 @@ zonas:
 
   - id: tests-de-gates
     nombre: Tests de los controles del CI
-    descripcion: Prueban la higiene de PR (secciones obligatorias, secretos), los gates sobre el diff, la guardia de tests y el rojo-verde; aflojar uno deja pasar lo que el CI frena
+    descripcion: Prueban la higiene de PR (secciones obligatorias, secretos), los gates sobre el diff, la guardia de tests, el rojo-verde y la mutación; aflojar uno deja pasar lo que el CI frena
     nivel: alto
     rutas:
       - "tests/hygiene/**"
       - "tests/gates/**"
       - "tests/guardia/**"
       - "tests/rojo_verde/**"
+      - "tests/mutacion/**"
 
   - id: ci
     nombre: Workflows reutilizables y CI de este repo

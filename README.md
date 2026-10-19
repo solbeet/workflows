@@ -19,6 +19,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`gates.yml`](.github/workflows/gates.yml) | Gates sobre el diff del PR (fase V): cobertura de las líneas cambiadas, migraciones (pytest-alembic + squawk), contrato de la API (Schemathesis) y dependencias vulnerables (OSV-Scanner). Solo frena lo que introduce el PR | `cobertura-cambio`, `migraciones`, `contrato`, `dependencias` |
 | [`guardia-tests.yml`](.github/workflows/guardia-tests.yml) | Guardia de tests (fase V): frena el PR que borra, debilita o saltea tests existentes, o toca tests de aceptación, salvo dale de una persona (label) | `tests` |
 | [`rojo-verde.yml`](.github/workflows/rojo-verde.yml) | Rojo → verde (fase V): cada test nuevo de Python tiene que fallar sin el cambio y pasar con él | `rojo-verde` |
+| [`mutacion.yml`](.github/workflows/mutacion.yml) | Mutación informativa (fase V): puntaje de mutmut sobre los archivos de Python del diff y los mutantes que los tests no detectaron, en un comentario del PR; no bloquea | `mutacion` |
 | [`selftest.yml`](.github/workflows/selftest.yml) | Uso interno: lintea los workflows y los ejecuta contra el fixture de `tests/fixture/` | — |
 
 ## Requisitos (repo cliente)
@@ -219,6 +220,31 @@ Cómo funciona: lista los tests nuevos del PR (funciones `test*` y métodos `tes
 
 Hoy solo Python (pytest) dentro de `backend-dir`; un parametrizado cuenta como rojo en la base si falla al menos un caso.
 
+### `mutacion.yml`
+
+Mide si los tests del cambio detectan fallas. Toma los archivos de Python que el PR agrega o modifica (sin tests ni config), les inyecta mutaciones con [mutmut](https://github.com/boxed/mutmut) y corre los tests contra cada mutante; los que no detectan «sobreviven». **Es informativo**: el job no falla por el puntaje ni por un error de la herramienta. Solo con `pull_request` ([ADR 0009](docs/decisiones/0009-mutacion-informativa.md)).
+
+| Input | Tipo | Default | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) de los jobs. Ver «Elegir dónde corre». |
+| `backend-dir` | string | `backend` | no | Directorio con `pyproject.toml` y `uv.lock`. |
+| `python-version` | string | `""` | no | Igual que en `python-react.yml`. |
+| `postgres` | boolean | `false` | no | Postgres para los tests (exporta `DATABASE_URL`). |
+| `postgres-image` | string | `postgres:17` | no | Imagen del servicio Postgres. |
+| `max-minutes` | number | `10` | no | Tope de la corrida de mutmut. Si se agota, el comentario dice «incompleto» y mide lo que alcanzó. |
+| `max-survivors` | number | `20` | no | Cuántos mutantes sobrevivientes se muestran (el puntaje cuenta todos). |
+| `mutmut-version` | string | `3.8.0` | no | Versión exacta de mutmut. |
+| `test-paths` | string (multilínea) | patrones de tests de Python | no | Archivos que son tests (no se mutan). |
+| `ignore-paths` | string (multilínea) | docs, config, lockfiles, migraciones | no | Archivos que no se mutan. |
+
+Outputs: `puntaje` (0 a 100) y `sobrevivientes`; vacíos si no se pudo medir.
+
+Permisos del caller: `contents: read` y `pull-requests: write` (para el comentario). En PRs desde forks el token es de solo lectura: no hay comentario, el informe queda en el resumen del job.
+
+Qué deja: un único comentario por PR (se actualiza en cada push) que empieza con `<!-- solbeet-mutacion -->`: puntaje (mutantes detectados sobre los medidos), cuántos sobrevivieron, el diff de cada sobreviviente y una línea de datos en JSON para medir. El revisor con Claude lo lee como dato si está al momento de revisar; no lo espera.
+
+No aplica (verde, sin comentario) si el PR no cambia código de Python fuera de los tests, o si el repo ya configura mutmut en `[tool.mutmut]` (para no pisar su configuración). Hoy solo Python: Stryker (JS/TS) no está. Límite de mutmut 3.8.0: no muta funciones con decorador, así que las rutas de FastAPI (`@app.get`) no generan mutantes; se mide la lógica en funciones sin decorar.
+
 ### `imagen.yml`
 
 | Input | Tipo | Default | Obligatorio | Descripción |
@@ -271,6 +297,7 @@ Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que lla
 | `solbeet / cobertura-cambio`, `solbeet / migraciones`, `solbeet / contrato`, `solbeet / dependencias` | sí, antes de prender el merge automático (con `examples/gates.yml`, cuyo job se llama `solbeet`) |
 | `solbeet / tests` | sí, antes de prender el merge automático (con `examples/guardia-tests.yml`) |
 | `solbeet / rojo-verde` | sí, antes de prender el merge automático (con `examples/rojo-verde.yml`) |
+| `solbeet / mutacion` | **no**: es informativo hasta medirlo en 20 PRs (ADR 0009) |
 | `claude-review / review` | **no**: es informativo. Depende de un servicio externo y de secretos que los forks no reciben |
 
 Si el repo cliente le pone otro id (o `name:`) al job que llama, la primera parte del nombre cambia. Los nombres de los jobs de este repo (`backend`, `frontend`, `review`, `hygiene`, `secret-scan`) son parte del contrato y solo cambian en una versión mayor.

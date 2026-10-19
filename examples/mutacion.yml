@@ -1,0 +1,20 @@
+# Ejemplo para un repo cliente: copiar a .github/workflows/mutacion.yml.
+# Check resultante: "solbeet / mutacion". INFORMATIVO: nunca falla por el puntaje y no se marca como requerido.
+# Deja un comentario en el PR con el puntaje de mutación de los archivos del diff y los mutantes que
+# los tests no detectaron; el revisor con Claude lo lee (ver docs/decisiones/0009).
+name: mutacion
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  mutacion:
+    name: solbeet
+    uses: solbeet/workflows/.github/workflows/mutacion.yml@v1
+    with:
+      backend-dir: backend

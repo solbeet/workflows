@@ -2,6 +2,15 @@
 
 Última actualización: 2026-10-17 · Sin publicar: v1.7.0 (input `runner`, C3), v1.4.0 (`gates.yml`, V1) v1.5.0 (`guardia-tests.yml`, V2) y v1.6.0 (`rojo-verde.yml`, V3); ver abajo. Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
 
+## v1.8.0 (sin publicar): `mutacion.yml`
+
+| Qué | Cómo | Resultado |
+|---|---|---|
+| Cinco caminos con uv y mutmut 3.8.0 de verdad | `tests/mutacion/test_mutacion.py` sobre el fixture, API de GitHub simulada (macOS, bash 3.2) | 5/5: tests flojos → 50 % con los 2 sobrevivientes y su diff; tests completos → 100 %; tope agotado → «incompleto»; PR sin código → no aplica; repo con `[tool.mutmut]` → no aplica. La segunda corrida actualiza el comentario (un POST, un PATCH) |
+| Interrupción por SIGINT | mutmut interrumpido en plena corrida, local | sale con 0 y `mutmut results` sigue legible |
+
+No verificado: la corrida en un runner de GitHub (el `selftest / mutacion` del PR solo prueba «no aplica»); el tope real de 10 min con `timeout` de GNU (en local el tope se simula); el comentario contra la API real; la medición en 20 PRs que pide el ítem (el workflow deja el JSON para hacerla). Solo Python: falta Stryker. Hallazgo: mutmut 3.8.0 no muta funciones con decorador; las rutas de `tests/fixture/backend/app/main.py` no generaron ningún mutante (ver ADR 0009).
+
 ## v1.7.0 (sin publicar): input `runner` (C3)
 
 Los siete workflows reutilizables aceptan `runner` (default `ubuntu-latest`). Verificado: actionlint sin hallazgos y casos de `pr-hygiene` en verde en local; `selftest / ci-postgres` corre con `runner: ubuntu-24.04` y el resto con el default. No verificado: ejecución en un scale set propio (todavía no existe).

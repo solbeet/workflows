@@ -81,6 +81,9 @@ jobs:
       - name: Casos de rojo → verde (uv y pytest de verdad sobre el fixture)
         run: uv run --no-project --with pyyaml==6.0.2 python tests/rojo_verde/test_rojo_verde.py
 
+      - name: Casos de mutación (uv y mutmut de verdad sobre el fixture)
+        run: uv run --no-project --with pyyaml==6.0.2 python tests/mutacion/test_mutacion.py
+
   ci:
     name: ci
     uses: ./.github/workflows/python-react.yml
@@ -138,5 +141,17 @@ jobs:
       pull-requests: read
       issues: read
       actions: read
+    with:
+      backend-dir: tests/fixture/backend
+
+  mutacion:
+    name: mutacion
+    # Sobre el propio PR: el fixture rara vez cambia código de Python, así que lo normal
+    # es «no aplica». Los casos con mutantes están en hygiene-logic. Es informativo.
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/mutacion.yml
+    permissions:
+      contents: read
+      pull-requests: write
     with:
       backend-dir: tests/fixture/backend

@@ -2,6 +2,16 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [1.8.0] - sin publicar
+
+Sin tag publicado: se etiqueta al mergear (workflow nuevo, compatible; `v1` se mueve).
+
+### Agregado
+
+- `mutacion.yml` (fase V, ítem V12, solbeet/workflows#11): job `mutacion`, informativo. Corre mutmut sobre los archivos de Python que el PR agrega o modifica (tope `max-minutes`, 10 por defecto) y deja un comentario único en el PR con el puntaje, los mutantes sobrevivientes y una línea de datos en JSON para medirlo en 20 PRs antes de decidir si pasa a gate. No falla por el puntaje. [ADR 0009](docs/decisiones/0009-mutacion-informativa.md).
+- `claude-review.yml`: el prompt del revisor menciona el comentario `<!-- solbeet-mutacion -->` como dato a evaluar en la revisión de tests (sin cambios de inputs ni de permisos).
+- `examples/mutacion.yml` y `tests/mutacion/test_mutacion.py` (5 casos con uv y mutmut de verdad y una API de GitHub simulada, en `selftest / hygiene-logic`); `selftest / mutacion` sobre el propio PR.
+
 ## [1.7.0] - sin publicar
 
 Sin tag publicado: se etiqueta al mergear.

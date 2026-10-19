@@ -1,0 +1,422 @@
+# Mutación informativa sobre el diff (fase V, ítem V12).
+#
+# Mide si los tests del cambio detectan fallas: toma los archivos de Python que el
+# PR agrega o modifica, les inyecta mutaciones (mutmut cambia `>` por `>=`, `+` por
+# `-`, `True` por `False`, etc.) y corre los tests contra cada mutante. Un mutante
+# que los tests no detectan «sobrevive»: ahí el test no frena un cambio de
+# comportamiento.
+#
+# Es INFORMATIVO. El job nunca falla por el puntaje (ni por un error de la
+# herramienta); deja un comentario en el PR con el puntaje y los mutantes que
+# sobrevivieron, y el revisor con Claude (claude-review.yml) lo lee como dato.
+# Se mide en 20 PRs antes de decidir si pasa a gate (docs/decisiones/0009).
+#
+# Solo Python (mutmut) dentro de `backend-dir`. Stryker (JS/TS) no está: ver ADR 0009.
+# El nombre del job (`mutacion`) es parte del contrato (ADR 0002).
+name: mutacion
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner (label de runs-on) donde corren los jobs. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
+      backend-dir:
+        description: Directorio del backend (contiene pyproject.toml y uv.lock).
+        type: string
+        default: backend
+      python-version:
+        description: Versión de Python. Vacío = .python-version del backend, luego el de la raíz, luego 3.12.
+        type: string
+        default: ""
+      postgres:
+        description: Levantar Postgres para los tests y exportar DATABASE_URL.
+        type: boolean
+        default: false
+      postgres-image:
+        description: Imagen del servicio Postgres (solo si postgres es true).
+        type: string
+        default: postgres:17
+      max-minutes:
+        description: Tope, en minutos, de la corrida de mutmut. Si se agota, el comentario dice «incompleto» y mide lo que alcanzó a correr.
+        type: number
+        default: 10
+      max-survivors:
+        description: Máximo de mutantes sobrevivientes que se muestran en el comentario (el puntaje cuenta todos).
+        type: number
+        default: 20
+      mutmut-version:
+        description: Versión exacta de mutmut (se instala con uv, fijada).
+        type: string
+        default: 3.8.0
+      test-paths:
+        description: Patrones (fnmatch, uno por línea, relativos a la raíz) de los archivos que cuentan como tests (no se mutan).
+        type: string
+        default: |
+          tests/*
+          */tests/*
+          test/*
+          */test/*
+          test_*.py
+          */test_*.py
+          *_test.py
+          conftest.py
+          */conftest.py
+      ignore-paths:
+        description: Patrones (fnmatch, uno por línea) de archivos que no se mutan (config, docs, migraciones).
+        type: string
+        default: |
+          *.md
+          docs/*
+          .github/*
+          *.lock
+          *.toml
+          *.yml
+          *.yaml
+          *.json
+          *.txt
+          */migrations/*
+          */alembic/*
+    outputs:
+      puntaje:
+        description: Porcentaje de mutantes detectados (0 a 100), o vacío si no se pudo medir.
+        value: ${{ jobs.mutacion.outputs.puntaje }}
+      sobrevivientes:
+        description: Cantidad de mutantes que sobrevivieron, o vacío si no se pudo medir.
+        value: ${{ jobs.mutacion.outputs.sobrevivientes }}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Un push nuevo cancela la medición del commit anterior.
+  group: mutacion-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.backend-dir }}
+  cancel-in-progress: true
+
+jobs:
+  mutacion:
+    name: mutacion
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    # El tope de mutmut es `max-minutes`; el resto cubre instalar, los tests de base y el informe.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      puntaje: ${{ steps.informe.outputs.puntaje }}
+      sobrevivientes: ${{ steps.informe.outputs.sobrevivientes }}
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        image: ${{ inputs.postgres && inputs.postgres-image || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BACKEND_DIR: ${{ inputs.backend-dir }}
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::mutacion solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Archivos del diff
+        id: diff
+        env:
+          TEST_PATHS: ${{ inputs.test-paths }}
+          IGNORE_PATHS: ${{ inputs.ignore-paths }}
+        shell: python3 {0}
+        run: |
+          """Lista los archivos de Python que el PR agrega o modifica y decide si hay algo para mutar."""
+          import fnmatch
+          import os
+          import subprocess
+
+          try:
+              import tomllib
+          except ModuleNotFoundError:  # Python < 3.11 en un runner propio
+              tomllib = None
+
+          backend = os.environ["BACKEND_DIR"].strip("/")
+          tests = [p.strip() for p in os.environ["TEST_PATHS"].splitlines() if p.strip()]
+          ignore = [p.strip() for p in os.environ["IGNORE_PATHS"].splitlines() if p.strip()]
+          temp = os.environ["RUNNER_TEMP"]
+
+          def matches(path, pats):
+              return any(fnmatch.fnmatch(path, p) for p in pats)
+
+          diff = subprocess.run(
+              ["git", "-c", "core.quotePath=false", "diff", "--name-status", "-M", "HEAD^1", "HEAD"], capture_output=True, text=True, check=True
+          ).stdout
+          archivos = []
+          for linea in diff.splitlines():
+              partes = linea.split("\t")
+              estado, path = partes[0][0], partes[-1]
+              if estado == "D" or not path.endswith(".py"):
+                  continue
+              if not (path == backend or path.startswith(backend + "/")):
+                  continue
+              if matches(path, tests) or matches(path, ignore):
+                  continue
+              archivos.append(os.path.relpath(path, backend))
+
+          def salir(aplica, motivo):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write(f"aplica={'true' if aplica else 'false'}\n")
+              if not aplica:
+                  print(f"::notice::{motivo}")
+                  with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+                      s.write(f"## Mutación\n\nNo aplica: {motivo}\n")
+              raise SystemExit(0)
+
+          if not archivos:
+              salir(False, "el PR no agrega ni modifica código de Python fuera de los tests.")
+
+          # mutmut lee [tool.mutmut] de pyproject.toml y, solo si no está, setup.cfg.
+          # Para no pisar la configuración del repo, si ya tiene la suya no medimos.
+          pyproject = os.path.join(backend, "pyproject.toml")
+          if tomllib and os.path.exists(pyproject):
+              with open(pyproject, "rb") as f:
+                  if "mutmut" in tomllib.load(f).get("tool", {}):
+                      salir(False, "el repo ya configura mutmut en [tool.mutmut]; no se pisa su configuración.")
+
+          with open(os.path.join(temp, "mutar.txt"), "w") as f:
+              f.write("\n".join(sorted(archivos)) + "\n")
+          print(f"{len(archivos)} archivo(s) para mutar:")
+          print("\n".join(sorted(archivos)))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("aplica=true\n")
+
+      - name: Resolver versión de Python
+        if: steps.diff.outputs.aplica == 'true'
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        run: |
+          if [ -n "$INPUT_PYTHON_VERSION" ]; then version="$INPUT_PYTHON_VERSION"
+          elif [ -f .python-version ]; then version="$(head -n 1 .python-version | tr -d '[:space:]')"
+          elif [ -f "$GITHUB_WORKSPACE/.python-version" ]; then version="$(head -n 1 "$GITHUB_WORKSPACE/.python-version" | tr -d '[:space:]')"
+          else version="3.12"; fi
+          echo "UV_PYTHON=$version" >> "$GITHUB_ENV"
+
+      - name: Instalar uv
+        if: steps.diff.outputs.aplica == 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-dir }}/uv.lock
+
+      - name: Exportar DATABASE_URL
+        if: steps.diff.outputs.aplica == 'true' && inputs.postgres
+        run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test" >> "$GITHUB_ENV"
+
+      - name: Correr mutmut sobre los archivos del diff
+        id: mutar
+        if: steps.diff.outputs.aplica == 'true'
+        # Informativo: un error de la herramienta no pone el job en rojo; el informe lo cuenta.
+        continue-on-error: true
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          MAX_MINUTES: ${{ inputs.max-minutes }}
+          MUTMUT_VERSION: ${{ inputs.mutmut-version }}
+        run: |
+          # Sin mapfile ni arrays asociativos: el mismo script se prueba con el bash 3.2 de macOS (tests/mutacion).
+          case "$MAX_MINUTES" in ''|*[!0-9]*|0) echo "::error::max-minutes tiene que ser un entero positivo"; exit 1;; esac
+          # mutmut copia `source_paths` a mutants/ y solo muta los archivos de `only_mutate`.
+          # Se agrega al setup.cfg del repo (si lo hay) para no perder su configuración de pytest.
+          {
+            echo
+            echo "[mutmut]"
+            echo "source_paths ="
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in */*) echo "    ${f%%/*}";; *) echo "    $f";; esac
+            done < "$RUNNER_TEMP/mutar.txt" | sort -u
+            echo "only_mutate ="
+            while IFS= read -r f; do [ -n "$f" ] && echo "    $f"; done < "$RUNNER_TEMP/mutar.txt"
+          } >> setup.cfg
+          uv sync --frozen
+          inicio=$(date +%s)
+          # SIGINT: mutmut guarda lo que ya midió y sale limpio al agotarse el tope.
+          set +e
+          timeout --signal=INT --kill-after=60 "${MAX_MINUTES}m" \
+            uv run --frozen --with "mutmut==${MUTMUT_VERSION}" mutmut run > "$RUNNER_TEMP/mutmut.log" 2>&1
+          codigo=$?
+          set -e
+          echo "$(( $(date +%s) - inicio ))" > "$RUNNER_TEMP/mutmut-segundos.txt"
+          echo "$codigo" > "$RUNNER_TEMP/mutmut-codigo.txt"
+          tail -n 25 "$RUNNER_TEMP/mutmut.log"
+
+      - name: Informe y comentario en el PR
+        id: informe
+        if: ${{ !cancelled() && steps.diff.outputs.aplica == 'true' }}
+        working-directory: ${{ inputs.backend-dir }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          API_URL: ${{ github.api_url }}
+          MAX_MINUTES: ${{ inputs.max-minutes }}
+          MAX_SURVIVORS: ${{ inputs.max-survivors }}
+          MUTMUT_VERSION: ${{ inputs.mutmut-version }}
+        shell: python3 {0}
+        run: |
+          """Arma el informe de mutación, lo deja en el resumen del job y en un comentario del PR."""
+          import json
+          import os
+          import re
+          import subprocess
+          import urllib.error
+          import urllib.request
+
+          temp = os.environ["RUNNER_TEMP"]
+          marca = "<!-- solbeet-mutacion -->"
+          version = os.environ["MUTMUT_VERSION"]
+          tope = int(os.environ["MAX_MINUTES"])
+          max_sobrevivientes = int(os.environ["MAX_SURVIVORS"])
+          archivos = [l.strip() for l in open(os.path.join(temp, "mutar.txt")) if l.strip()]
+
+          def leer(nombre, defecto=""):
+              try:
+                  return open(os.path.join(temp, nombre)).read().strip()
+              except FileNotFoundError:
+                  return defecto
+
+          def mutmut(*args):
+              return subprocess.run(
+                  ["uv", "run", "--frozen", "--with", f"mutmut=={version}", "mutmut", *args],
+                  capture_output=True, text=True,
+              )
+
+          codigo = leer("mutmut-codigo.txt", "")
+          segundos = int(leer("mutmut-segundos.txt", "0") or 0)
+          # 124 = timeout con SIGINT; 137 = matado con SIGKILL tras el período de gracia.
+          incompleto = codigo in ("124", "137")
+
+          estados = {}
+          if codigo:
+              for linea in mutmut("results", "--all", "true").stdout.splitlines():
+                  m = re.match(r"\s+(\S+): (.+?)\s*$", linea)
+                  if m:
+                      estados[m[1]] = m[2].strip().lower()
+
+          detectados_estados = {"killed", "timeout", "segfault", "caught by type check"}
+          no_detectados_estados = {"survived", "no tests", "suspicious"}
+          detectados = sum(1 for e in estados.values() if e in detectados_estados)
+          sobrevivientes = [n for n, e in estados.items() if e == "survived"]
+          sin_tests = [n for n, e in estados.items() if e == "no tests"]
+          sospechosos = [n for n, e in estados.items() if e == "suspicious"]
+          sin_medir = sum(1 for e in estados.values() if e not in detectados_estados | no_detectados_estados)
+          medidos = detectados + len(sobrevivientes) + len(sin_tests) + len(sospechosos)
+          puntaje = round(100 * detectados / medidos, 1) if medidos else None
+
+          lineas = [marca, "## Mutación sobre el diff (informativo)", ""]
+          if puntaje is None:
+              if not codigo:
+                  razon = "no se llegó a correr mutmut (falló la preparación del entorno)"
+              elif not estados:
+                  razon = "mutmut no generó mutantes en estos archivos (por ejemplo, no tienen funciones sin decoradores) o no encontró tests que los cubran"
+              else:
+                  razon = "mutmut no llegó a medir ningún mutante"
+              cola = "\n".join(leer("mutmut.log").splitlines()[-15:])
+              lineas += [
+                  f"No se pudo medir: {razon}. Código de salida de mutmut: `{codigo or 'sin corrida'}`.",
+                  "",
+                  "<details><summary>Cola del log de mutmut</summary>",
+                  "",
+                  "~~~~text",
+                  cola.replace("~~~~", "~~~"),
+                  "~~~~",
+                  "</details>",
+              ]
+          else:
+              estado_corrida = f" · **incompleto: se agotó el tope de {tope} min**, {sin_medir} mutante(s) sin medir" if incompleto else ""
+              lineas += [
+                  f"**Puntaje: {str(puntaje).replace('.', ',')} %** ({detectados} de {medidos} mutantes detectados por los tests)"
+                  f" · {len(sobrevivientes)} sobrevivieron, {len(sin_tests)} sin tests que los cubran"
+                  f" · {segundos // 60} min {segundos % 60} s{estado_corrida}",
+                  "",
+                  f"Archivos mutados: {', '.join(f'`{a}`' for a in archivos)}. No bloquea el merge: es una medición.",
+              ]
+              detalle = [(n, "sobrevivió") for n in sobrevivientes] + [(n, "sin tests") for n in sin_tests]
+              if detalle:
+                  lineas += ["", f"### Mutantes que los tests no detectaron ({len(detalle)})", ""]
+                  lineas += [
+                      "Cada diff es un cambio de comportamiento que ningún test frenó. "
+                      "Revisor: decidí si el test que falta es relevante para la spec.",
+                      "",
+                  ]
+                  for nombre, motivo in detalle[:max_sobrevivientes]:
+                      diff = mutmut("show", nombre).stdout.splitlines()
+                      cuerpo = "\n".join(l for l in diff if not l.startswith("# ") and not l.startswith(("---", "+++")))
+                      lineas += [
+                          f"<details><summary><code>{nombre}</code> ({motivo})</summary>",
+                          "",
+                          "~~~~diff",
+                          cuerpo.replace("~~~~", "~~~")[:2000],
+                          "~~~~",
+                          "</details>",
+                      ]
+                  if len(detalle) > max_sobrevivientes:
+                      lineas += ["", f"… y {len(detalle) - max_sobrevivientes} más (el puntaje los cuenta)."]
+          datos = {
+              "puntaje": puntaje, "detectados": detectados, "sobrevivientes": len(sobrevivientes),
+              "sin_tests": len(sin_tests), "sin_medir": sin_medir, "incompleto": incompleto,
+              "segundos": segundos, "archivos": len(archivos), "mutmut": version, "sha": os.environ["HEAD_SHA"],
+          }
+          lineas += ["", f"<!-- solbeet-mutacion-datos {json.dumps(datos, separators=(',', ':'))} -->"]
+          cuerpo = "\n".join(lineas) + "\n"
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(cuerpo.replace(marca + "\n", "", 1))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"puntaje={'' if puntaje is None else puntaje}\n")
+              out.write(f"sobrevivientes={'' if puntaje is None else len(sobrevivientes)}\n")
+          print(f"puntaje={puntaje} detectados={detectados} medidos={medidos} sin_medir={sin_medir} incompleto={incompleto}")
+
+          def api(metodo, ruta, cuerpo_json=None):
+              req = urllib.request.Request(
+                  f"{os.environ['API_URL']}{ruta}",
+                  data=None if cuerpo_json is None else json.dumps(cuerpo_json).encode(),
+                  method=metodo,
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+
+          # Un solo comentario por PR: se actualiza el que ya tiene la marca.
+          try:
+              repo, numero = os.environ["REPO"], os.environ["PR_NUMBER"]
+              existente, pagina = None, 1
+              while existente is None:
+                  tanda = api("GET", f"/repos/{repo}/issues/{numero}/comments?per_page=100&page={pagina}")
+                  existente = next((c for c in tanda if c["body"].startswith(marca) and c["user"]["type"] == "Bot"), None)
+                  if len(tanda) < 100:
+                      break
+                  pagina += 1
+              if existente:
+                  api("PATCH", f"/repos/{repo}/issues/comments/{existente['id']}", {"body": cuerpo})
+              else:
+                  api("POST", f"/repos/{repo}/issues/{numero}/comments", {"body": cuerpo})
+          except (urllib.error.URLError, KeyError) as exc:
+              # PRs desde forks: el token es de solo lectura. El resumen del job queda igual.
+              print(f"::warning::No se pudo comentar en el PR ({exc}); el informe está en el resumen del job.")
