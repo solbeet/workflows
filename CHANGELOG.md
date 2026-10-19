@@ -2,9 +2,9 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
-## [1.8.0] - sin publicar
+## [1.8.0] - 2026-10-19
 
-Sin tag publicado: se etiqueta al mergear (workflow nuevo, compatible; `v1` se mueve).
+Tag `v1.8.0` sobre c549e01 (merge de #29), creado el 2026-10-19. El tag mayor `v1` apunta a v1.8.0 (workflow nuevo, compatible).
 
 ### Agregado
 
@@ -12,9 +12,9 @@ Sin tag publicado: se etiqueta al mergear (workflow nuevo, compatible; `v1` se m
 - `claude-review.yml`: el prompt del revisor menciona el comentario `<!-- solbeet-mutacion -->` como dato a evaluar en la revisión de tests (sin cambios de inputs ni de permisos).
 - `examples/mutacion.yml` y `tests/mutacion/test_mutacion.py` (5 casos con uv y mutmut de verdad y una API de GitHub simulada, en `selftest / hygiene-logic`); `selftest / mutacion` sobre el propio PR.
 
-## [1.7.0] - sin publicar
+## [1.7.0] - 2026-10-19
 
-Sin tag publicado: se etiqueta al mergear.
+Tag `v1.7.0` sobre 556059f (merge de #28), creado el 2026-10-19. Incluye #23 (input `runner`, C3), #26 (construcción nativa, C4) y #28 (digests por nombre exacto).
 
 ### Agregado
 

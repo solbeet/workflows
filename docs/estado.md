@@ -1,8 +1,8 @@
 # Estado
 
-Última actualización: 2026-10-17 · Sin publicar: v1.7.0 (input `runner`, C3), v1.4.0 (`gates.yml`, V1) v1.5.0 (`guardia-tests.yml`, V2) y v1.6.0 (`rojo-verde.yml`, V3); ver abajo. Publicada: v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
+Última actualización: 2026-10-19 · Publicada: v1.8.0 (`mutacion.yml`, V12), tag creado el 2026-10-19 sobre c549e01; `v1` apunta a v1.8.0. Antes, también taggeadas: v1.7.0 (input `runner`, C3, y construcción nativa por arquitectura, C4; 2026-10-19, 556059f), v1.6.0 (`rojo-verde.yml`, V3; 2026-10-14), v1.5.0 (`guardia-tests.yml`, V2; 2026-10-13) y v1.4.0 (`gates.yml`, V1; 2026-10-13); ver abajo. v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
 
-## v1.8.0 (sin publicar): `mutacion.yml`
+## v1.8.0 (2026-10-19): `mutacion.yml`
 
 | Qué | Cómo | Resultado |
 |---|---|---|
@@ -11,11 +11,11 @@
 
 No verificado: la corrida en un runner de GitHub (el `selftest / mutacion` del PR solo prueba «no aplica»); el tope real de 10 min con `timeout` de GNU (en local el tope se simula); el comentario contra la API real; la medición en 20 PRs que pide el ítem (el workflow deja el JSON para hacerla). Solo Python: falta Stryker. Hallazgo: mutmut 3.8.0 no muta funciones con decorador; las rutas de `tests/fixture/backend/app/main.py` no generaron ningún mutante (ver ADR 0009).
 
-## v1.7.0 (sin publicar): input `runner` (C3)
+## v1.7.0 (2026-10-19): input `runner` (C3)
 
 Los siete workflows reutilizables aceptan `runner` (default `ubuntu-latest`). Verificado: actionlint sin hallazgos y casos de `pr-hygiene` en verde en local; `selftest / ci-postgres` corre con `runner: ubuntu-24.04` y el resto con el default. No verificado: ejecución en un scale set propio (todavía no existe).
 
-## v1.6.0 (sin publicar): `rojo-verde.yml`
+## v1.6.0 (2026-10-14): `rojo-verde.yml`
 
 | Qué | Cómo | Resultado |
 |---|---|---|
@@ -25,7 +25,7 @@ Los siete workflows reutilizables aceptan `runner` (default `ubuntu-latest`). Ve
 
 No verificado: el dale humano contra la API real (mismo código que la guardia, probado con la API simulada allá). Solo Python: vitest y jest quedan para más adelante.
 
-## v1.5.0 (sin publicar): `guardia-tests.yml`
+## v1.5.0 (2026-10-13): `guardia-tests.yml`
 
 | Qué | Cómo | Resultado |
 |---|---|---|
@@ -36,7 +36,7 @@ No verificado: el dale humano contra la API real (mismo código que la guardia, 
 
 No verificado: la vía de escape contra la API real de GitHub (requiere que una persona ponga el label; está cubierta con la API simulada).
 
-## v1.4.0 (sin publicar): `gates.yml`
+## v1.4.0 (2026-10-13): `gates.yml`
 
 Verificado en GitHub Actions, no solo local:
 
