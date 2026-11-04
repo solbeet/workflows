@@ -86,3 +86,42 @@ No hay build ni paquete: "publicar" es crear tags (ver `docs/desarrollo.md#publi
 - Al mover el tag mayor, apuntarlo al commit (`"v1.1.0^{}"`), no al tag anotado: si no, git crea un tag anidado.
 
 - `node --test <carpeta>` falla en Node 22 (toma la carpeta como módulo): usar un glob `"test/**/*.test.js"`.
+
+<!-- metodo:agents-md version=1.6.0 · generado con `metodo agents-md generar`, no editar -->
+## Cómo se programa
+
+Sale de las reglas del método 1.6.0 (`reglas/tdd-unitario.md`, `reglas/oficio-y-diseno.md`). No la edites acá: el check de CI falla si difiere de lo generado. Para cambiarla, cambiá la regla en `solbeet/solbeet-metodo` y regenerá con `uvx --from git+https://github.com/solbeet/solbeet-metodo@v1.6.0 metodo agents-md generar --version 1.6.0 --escribir AGENTS.md`. El resto de este archivo es del repo.
+
+### TDD en ciclos chicos
+
+Además de las pruebas de los criterios, el código se escribe con TDD también a nivel unitario: cada regla, caso borde o rama nueva entra por un test. Nada de código de producción sin un test que lo pida.
+
+1. **Rojo.** Escribí un test por vez, el más chico que exprese la próxima regla, y corrélo hasta ver que falle por la razón correcta (la aserción sobre el comportamiento que falta), no por un import roto o un nombre mal escrito. Guardá el nombre del test y el mensaje de la falla.
+2. **Verde.** El código mínimo para que ese test pase, sin adelantarte a casos que ningún test pide. Corré los tests del módulo.
+3. **Refactor.** Con todo en verde, mejorá nombres, duplicación y estructura de lo que tocaste. Corré los tests después de cada cambio; si algo se pone rojo, volvé al último verde.
+
+Repetí el ciclo hasta cubrir lo que pide la spec. El valor esperado de cada test sale del pedido, nunca de la misma cuenta que hace el código.
+
+#### Que se vea en la historia y en la evidencia
+
+- Cada test nuevo va en un commit igual o anterior al del código que lo hace pasar: puede ir solo, antes, o en el mismo commit que su código, pero nunca después.
+- En `## Evidencia` del PR, arriba de la salida en rojo, una línea `Falló primero: <nombre del test> — <mensaje de la falla>` con el primer test que corriste fallando (si hubo pruebas de criterios, la primera de ellas) y, si hay tests unitarios aparte, su primer rojo también.
+- Un test que escribiste después del código y que pasa sin el cambio no prueba nada, y la revisión lo bloquea: antes de terminar, reescribilo para que falle sin el cambio, o sacalo y decilo en la evidencia.
+
+### Oficio y diseño
+
+Oficio:
+
+- No entregues lo que no sabés que funciona: si no lo viste andar con un test o una salida real, no está terminado.
+- Si algo no se puede hacer bien dentro del alcance, decilo (en `no_verificado` o escalando) en lugar de entregarlo a medias o con atajos escondidos.
+- Estado y estimaciones honestos: lo que falta se dice, no se maquilla.
+- Dejá lo que tocaste un poco más claro de lo que estaba; nada de refactors fuera del alcance (regla «Cambio mínimo»).
+
+Diseño, con el mismo criterio que para servicios separados:
+
+- Cada módulo tiene una responsabilidad y un contrato explícito: qué recibe, qué devuelve y qué errores da, con tipos.
+- Los bordes (HTTP, base de datos, colas, archivos, GitHub, modelos de lenguaje) quedan detrás de una interfaz chica que se reemplaza en los tests por una versión en memoria.
+- Donde dos servicios se hablan, tests de contrato fijan la forma del mensaje de los dos lados.
+- Nada de dependencias ocultas entre módulos: ni estado global compartido, ni importar internos de otro módulo; lo que un módulo necesita le llega por parámetro.
+
+<!-- /metodo:agents-md -->
