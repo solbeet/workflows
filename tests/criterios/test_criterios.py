@@ -82,8 +82,8 @@ def junit(tmp_path: pathlib.Path, casos: dict[str, str]) -> pathlib.Path:
         filas.append(f'<testcase classname="tests.test_x" name="{nombre}">{hijo}</testcase>')
     ruta = tmp_path / "junit.xml"
     ruta.write_text(
-        '<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="%d">%s</testsuite></testsuites>'
-        % (len(casos), "".join(filas))
+        f'<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="{len(casos)}">'
+        f"{''.join(filas)}</testsuite></testsuites>"
     )
     return ruta
 
@@ -285,7 +285,7 @@ def test_ca_33_5_main_neutral_nunca_verde(tmp_path):
 
 
 def test_necesidades_vinculadas_mismo_repo_y_otro_repo():
-    cuerpo = "Closes #7\nfixes otra/cosa#12\nResolves: #7\nRelacionado con #99\n`Closes #5` en código no"
+    cuerpo = "Closes #7\nfixes otra/cosa#12\nResolves: #7\nRelacionado con #99\n`Closes #5` también cuenta"
     assert [str(n) for n in criterios.necesidades_vinculadas(cuerpo, REPO)] == [
         "org/app#7",
         "otra/cosa#12",
