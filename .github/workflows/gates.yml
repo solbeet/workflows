@@ -1,7 +1,8 @@
 # Gates de verificación sobre el diff del PR (fase V, ítem V1).
 #
-# Cuatro jobs, cada uno es un check requerido candidato para el merge
-# automático (ADR 0004 §13.1 de la fábrica: "checks requeridos en verde"):
+# Cinco jobs. Los cuatro primeros son checks requeridos candidatos para el merge
+# automático (ADR 0004 §13.1 de la fábrica: "checks requeridos en verde"); el
+# quinto entra como informativo y cada repo decide cuándo exigirlo:
 #
 #   cobertura-cambio  las líneas Python que agrega o cambia el PR están cubiertas
 #                     por tests (diff-cover, umbral `coverage-min`).
@@ -12,8 +13,14 @@
 #                     app levantada dentro del runner, con Postgres de prueba).
 #   dependencias      el PR no agrega dependencias con vulnerabilidades altas o
 #                     críticas que ya tengan arreglo (OSV-Scanner sobre los lockfiles).
+#   criterios         cada criterio de la necesidad que cierra el PR tiene al menos un
+#                     test test_ca_<issue>_<n>_* en el diff que pasó; matriz RUNTIME /
+#                     CODE / SIN-EVIDENCIA en el resumen y como artefacto JSON. Una suite
+#                     que no corrió ningún test es rojo, nunca verde. Sin modelo: lo
+#                     cuenta scripts/criterios.py (ADR 0010). Lee el issue: el caller
+#                     tiene que dar `issues: read`.
 #
-# Regla común: **solo frena lo que introduce el PR**. Cada job compara contra la
+# Regla común de los cuatro primeros: **solo frena lo que introduce el PR**. Cada job compara contra la
 # rama base (HEAD^1 del commit de merge de pull_request): lo que ya fallaba en la
 # base se informa como aviso y no bloquea. Así los gates sirven en código heredado
 # sin tests (proyectos que adoptan el método sobre un producto existente).
@@ -79,6 +86,10 @@ on:
         description: Puntaje CVSS a partir del cual una vulnerabilidad nueva con arreglo disponible frena el PR.
         type: number
         default: 7
+      criterios-dir:
+        description: Directorio donde el job criterios corre la suite con pytest (contiene pyproject.toml y uv.lock). Vacío = backend-dir.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -915,3 +926,526 @@ jobs:
                       s.write(f"- {t}\n")
                   s.write("\n</details>\n")
           sys.exit(1 if frena else 0)
+
+  criterios:
+    name: criterios
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    # Solo lectura: el issue de la necesidad se lee con este token (nunca con uno de
+    # escritura). El caller tiene que dar issues: read o el workflow no arranca.
+    permissions:
+      contents: read
+      issues: read
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        # Con imagen vacía GitHub no levanta el servicio.
+        image: ${{ inputs.postgres && inputs.postgres-image || '' }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CRITERIOS_DIR: ${{ inputs.criterios-dir || inputs.backend-dir }}
+    steps:
+      - name: Verificar evento
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "::error::gates solo funciona con el evento pull_request (recibido: ${GITHUB_EVENT_NAME})."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # El commit de merge y sus padres: el diff HEAD^1..HEAD es lo que agrega el PR.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolver versión de Python
+        working-directory: ${{ env.CRITERIOS_DIR }}
+        env:
+          INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        run: |
+          if [ -n "$INPUT_PYTHON_VERSION" ]; then version="$INPUT_PYTHON_VERSION"
+          elif [ -f .python-version ]; then version="$(head -n 1 .python-version | tr -d '[:space:]')"
+          elif [ -f "$GITHUB_WORKSPACE/.python-version" ]; then version="$(head -n 1 "$GITHUB_WORKSPACE/.python-version" | tr -d '[:space:]')"
+          else version="3.12"; fi
+          echo "UV_PYTHON=$version" >> "$GITHUB_ENV"
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ env.CRITERIOS_DIR }}/uv.lock
+
+      - name: Exportar DATABASE_URL
+        if: inputs.postgres
+        run: echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/test" >> "$GITHUB_ENV"
+
+      - name: Correr la suite
+        id: suite
+        working-directory: ${{ env.CRITERIOS_DIR }}
+        env:
+          JUNIT: ${{ runner.temp }}/criterios-junit.xml
+        run: |
+          # La suite se corre acá y no se lee de otro job: el JUnit dice qué tests
+          # corrieron de verdad. Un test que falla lo frena `ci / backend`; acá solo
+          # cuenta como criterio sin evidencia. El veredicto lo da el paso Veredicto.
+          rm -f "$JUNIT"
+          codigo=0
+          uv sync --frozen || codigo=$?
+          if [ "$codigo" -eq 0 ]; then
+            uv run --frozen pytest -p no:cacheprovider --junitxml="$JUNIT" || codigo=$?
+          fi
+          echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
+          # Un nombre de artefacto por directorio: un caller puede llamar a gates.yml
+          # más de una vez en la misma corrida (un backend por llamada).
+          echo "artefacto=criterios-$(printf '%s' "$CRITERIOS_DIR" | tr -c 'A-Za-z0-9._-' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Matriz por criterio
+        id: matriz
+        env:
+          # El cuerpo del PR lo escribe el autor: entra por env, nunca interpolado.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+          API_URL: ${{ github.api_url }}
+          GH_TOKEN: ${{ github.token }}
+          JUNIT: ${{ runner.temp }}/criterios-junit.xml
+          PYTEST_CODIGO: ${{ steps.suite.outputs.codigo }}
+          MATRIZ_JSON: ${{ runner.temp }}/criterios-matriz.json
+        # Copia incrustada de scripts/criterios.py (los reutilizables corren con el
+        # checkout del caller). No editar acá: editar el script y correr
+        # scripts/incrustar-criterios.py; tests/criterios falla si difieren.
+        shell: python3 {0}
+        run: |
+          """Matriz por criterio de la necesidad del PR, contada por script (V22, solbeet/workflows#33).
+
+          Lee los criterios de aceptación de la necesidad que cierra el PR (bullets ``- [ ]`` bajo
+          un encabezado con «criterio»), busca en las líneas que agrega el PR al menos un test
+          ``test_ca_<issue>_<n>_*`` por criterio y cruza con el JUnit de la suite corrida en el job:
+
+          - RUNTIME: el criterio pasó contra un ambiente (``resultado.json`` de la verificación en
+            staging, ``e2e.criterios``, sin fallos de ese criterio).
+          - CODE: un test del criterio que agrega el PR pasó en esta corrida de CI.
+          - SIN-EVIDENCIA: ninguna de las dos.
+
+          Resultado: ``verde`` (todo criterio RUNTIME o CODE), ``rojo`` (``sin_tests_corridos`` si
+          la suite no corrió ningún test, ``criterios_sin_evidencia`` si falta alguno) o ``neutral``
+          (``no_medido``: sin necesidad vinculada o sin criterios legibles). Nunca usa un modelo.
+
+          Este archivo es la fuente: el paso «Matriz por criterio» del job ``criterios`` de
+          ``.github/workflows/gates.yml`` lleva una copia incrustada (los reutilizables corren con
+          el checkout del repo que llama, ver AGENTS.md). ``scripts/incrustar-criterios.py`` la
+          actualiza y ``tests/criterios`` falla si difieren. Solo biblioteca estándar, Python 3.10+.
+
+          Entrada por entorno: PR_BODY, REPO, API_URL, GH_TOKEN (solo lectura), JUNIT,
+          PYTEST_CODIGO, RUNTIME_RESULTADO (opcional), MATRIZ_JSON, GITHUB_STEP_SUMMARY,
+          GITHUB_OUTPUT, GITHUB_WORKSPACE.
+          """
+
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import urllib.error
+          import urllib.request
+          import xml.etree.ElementTree as ET
+          from dataclasses import asdict, dataclass, field
+          from pathlib import Path
+          from typing import Protocol
+
+          SCHEMA = 1
+          RUNTIME, CODE, SIN_EVIDENCIA = "RUNTIME", "CODE", "SIN-EVIDENCIA"
+
+          _VINCULO = re.compile(
+              r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+(?:([\w.-]+/[\w.-]+))?#(\d+)\b",
+              re.IGNORECASE,
+          )
+          _ENCABEZADO = re.compile(r"^#{1,6}\s+(.*)$")
+          _BULLET = re.compile(r"^[-*]\s+\[[ xX]\]\s+(.+?)\s*$")
+          _TEST_CA = re.compile(r"\b(test_ca_(\d+)_(\d+)\w*)")
+          _CA_RUNTIME = re.compile(r"^CA-(\d+)-(\d+)$", re.IGNORECASE)
+
+
+          # --- Datos --------------------------------------------------------------------------------
+
+
+          @dataclass(frozen=True)
+          class Necesidad:
+              repo: str
+              numero: int
+
+              def __str__(self) -> str:
+                  return f"{self.repo}#{self.numero}"
+
+
+          @dataclass
+          class FilaCriterio:
+              necesidad: str
+              issue: int
+              n: int
+              texto: str
+              estado: str
+              tests: list[str] = field(default_factory=list)
+              motivo: str = ""
+
+
+          @dataclass
+          class Suite:
+              """Lo que corrió la suite: cantidad de tests no salteados y estado por nombre base."""
+
+              corridos: int
+              fallados: frozenset[str]
+              pasados: frozenset[str]
+
+              def paso(self, nombre: str) -> bool:
+                  return nombre in self.pasados and nombre not in self.fallados
+
+
+          @dataclass
+          class Informe:
+              resultado: str
+              motivo: str
+              detalle: str
+              necesidades: list[str] = field(default_factory=list)
+              criterios: list[FilaCriterio] = field(default_factory=list)
+              corridos: int | None = None
+
+              def a_json(self) -> dict:
+                  datos = asdict(self)
+                  return {"schema": SCHEMA, **datos}
+
+
+          class IssueIlegible(Exception):
+              """La necesidad no se pudo leer (no existe, sin permiso, error de red, es un PR)."""
+
+
+          class DiffIlegible(Exception):
+              """No se pudo calcular el diff del PR."""
+
+
+          # --- Interfaces externas ------------------------------------------------------------------
+
+
+          class FuenteIssues(Protocol):
+              def cuerpo(self, necesidad: Necesidad) -> str: ...
+
+
+          class FuenteDiff(Protocol):
+              def lineas_agregadas(self) -> str: ...
+
+
+          class GitHubIssues:
+              """Lee issues con la API REST y un token de solo lectura."""
+
+              def __init__(self, api_url: str, token: str) -> None:
+                  self.api_url = api_url.rstrip("/")
+                  self.token = token
+
+              def cuerpo(self, necesidad: Necesidad) -> str:
+                  url = f"{self.api_url}/repos/{necesidad.repo}/issues/{necesidad.numero}"
+                  cabeceras = {"Accept": "application/vnd.github+json"}
+                  if self.token:
+                      cabeceras["Authorization"] = f"Bearer {self.token}"
+                  try:
+                      with urllib.request.urlopen(urllib.request.Request(url, headers=cabeceras), timeout=30) as r:
+                          datos = json.load(r)
+                  except (urllib.error.URLError, OSError, ValueError) as exc:
+                      raise IssueIlegible(f"{necesidad}: {exc}") from exc
+                  if "pull_request" in datos:
+                      raise IssueIlegible(f"{necesidad}: es un PR, no una necesidad")
+                  return datos.get("body") or ""
+
+
+          class GitDiff:
+              """Líneas del commit de merge de pull_request contra su base (HEAD^1)."""
+
+              def __init__(self, cwd: str) -> None:
+                  self.cwd = cwd
+
+              def lineas_agregadas(self) -> str:
+                  r = subprocess.run(
+                      ["git", "diff", "--unified=0", "--no-color", "HEAD^1", "HEAD"],
+                      cwd=self.cwd,
+                      capture_output=True,
+                      text=True,
+                  )
+                  if r.returncode != 0:
+                      raise DiffIlegible(r.stderr.strip() or f"git diff salió con {r.returncode}")
+                  return r.stdout
+
+
+          # --- Lectura ------------------------------------------------------------------------------
+
+
+          def necesidades_vinculadas(cuerpo_pr: str, repo: str) -> list[Necesidad]:
+              """Necesidades que cierra el PR (Closes/Fixes/Resolves #N u owner/repo#N), sin repetir."""
+              vistas: list[Necesidad] = []
+              for m in _VINCULO.finditer(cuerpo_pr or ""):
+                  necesidad = Necesidad(m.group(1) or repo, int(m.group(2)))
+                  if necesidad not in vistas:
+                      vistas.append(necesidad)
+              return vistas
+
+
+          def leer_criterios(cuerpo_issue: str) -> list[str]:
+              """Bullets ``- [ ]`` de primer nivel bajo el primer encabezado que dice «criterio»."""
+              criterios: list[str] = []
+              dentro = False
+              for linea in (cuerpo_issue or "").splitlines():
+                  encabezado = _ENCABEZADO.match(linea.strip())
+                  if encabezado:
+                      if dentro:
+                          break
+                      dentro = "criterio" in encabezado.group(1).lower()
+                      continue
+                  bullet = _BULLET.match(linea) if dentro else None
+                  if bullet:
+                      criterios.append(bullet.group(1))
+              return criterios
+
+
+          def tests_por_criterio(diff: str) -> dict[tuple[int, int], set[str]]:
+              """Nombres ``test_ca_<issue>_<n>*`` en las líneas que agrega el diff."""
+              encontrados: dict[tuple[int, int], set[str]] = {}
+              for linea in diff.splitlines():
+                  if not linea.startswith("+") or linea.startswith("+++"):
+                      continue
+                  for m in _TEST_CA.finditer(linea):
+                      encontrados.setdefault((int(m.group(2)), int(m.group(3))), set()).add(m.group(1))
+              return encontrados
+
+
+          def leer_junit(ruta: Path) -> Suite | None:
+              """Suite desde el JUnit XML de pytest; ``None`` si no hay reporte o no se puede leer."""
+              try:
+                  raiz = ET.parse(ruta).getroot()
+              except (ET.ParseError, OSError):
+                  return None
+              corridos = 0
+              fallados: set[str] = set()
+              pasados: set[str] = set()
+              for caso in raiz.iter("testcase"):
+                  if caso.find("skipped") is not None:
+                      continue
+                  corridos += 1
+                  nombre = caso.get("name", "").split("[", 1)[0]
+                  malo = caso.find("failure") is not None or caso.find("error") is not None
+                  (fallados if malo else pasados).add(nombre)
+              return Suite(corridos, frozenset(fallados), frozenset(pasados))
+
+
+          def leer_runtime(resultado: object) -> set[tuple[int, int]]:
+              """Criterios que pasaron contra un ambiente según ``resultado.json`` (esquema 1)."""
+              e2e = resultado.get("e2e") if isinstance(resultado, dict) else None
+              if not isinstance(e2e, dict) or e2e.get("estado") != "corrio":
+                  return set()
+              fallados = {f.get("criterio") for f in e2e.get("fallos") or [] if isinstance(f, dict)}
+              pasaron: set[tuple[int, int]] = set()
+              for criterio in e2e.get("criterios") or []:
+                  m = _CA_RUNTIME.match(str(criterio))
+                  if m and criterio not in fallados:
+                      pasaron.add((int(m.group(1)), int(m.group(2))))
+              return pasaron
+
+
+          # --- Decisión -----------------------------------------------------------------------------
+
+
+          def _leer_necesidades(
+              cuerpo_pr: str, repo: str, issues: FuenteIssues
+          ) -> tuple[list[Necesidad], dict[Necesidad, list[str]], list[str]]:
+              necesidades = necesidades_vinculadas(cuerpo_pr, repo)
+              if not necesidades:
+                  return [], {}, ["sin necesidad vinculada (Closes #N en el cuerpo del PR)"]
+              criterios: dict[Necesidad, list[str]] = {}
+              problemas: list[str] = []
+              for necesidad in necesidades:
+                  try:
+                      textos = leer_criterios(issues.cuerpo(necesidad))
+                  except IssueIlegible as exc:
+                      problemas.append(f"{necesidad}: no se pudo leer ({exc})")
+                      continue
+                  if not textos:
+                      problemas.append(f"{necesidad}: sin criterios legibles (bullets - [ ] bajo un encabezado con «criterio»)")
+                  criterios[necesidad] = textos
+              return necesidades, criterios, problemas
+
+
+          def _fila(
+              necesidad: Necesidad,
+              n: int,
+              texto: str,
+              en_diff: set[str],
+              suite: Suite | None,
+              runtime: set[tuple[int, int]],
+          ) -> FilaCriterio:
+              clave = (necesidad.numero, n)
+              tests = sorted(en_diff)
+              fila = FilaCriterio(str(necesidad), necesidad.numero, n, texto, SIN_EVIDENCIA, tests)
+              if clave in runtime:
+                  fila.estado = RUNTIME
+              elif suite is not None and any(suite.paso(t) for t in tests):
+                  fila.estado = CODE
+              elif tests:
+                  fila.motivo = f"su prueba no pasó en CI ({', '.join(tests)})"
+              else:
+                  fila.motivo = f"sin prueba test_ca_{necesidad.numero}_{n}_* en el PR"
+              return fila
+
+
+          def armar_matriz(
+              criterios: dict[Necesidad, list[str]],
+              en_diff: dict[tuple[int, int], set[str]],
+              suite: Suite | None,
+              runtime: set[tuple[int, int]],
+          ) -> list[FilaCriterio]:
+              return [
+                  _fila(necesidad, n, texto, en_diff.get((necesidad.numero, n), set()), suite, runtime)
+                  for necesidad, textos in criterios.items()
+                  for n, texto in enumerate(textos, start=1)
+              ]
+
+
+          def evaluar(
+              *,
+              cuerpo_pr: str,
+              repo: str,
+              issues: FuenteIssues,
+              diff: FuenteDiff,
+              suite: Suite | None,
+              runtime: set[tuple[int, int]],
+              codigo_suite: str = "",
+          ) -> Informe:
+              necesidades, criterios, problemas = _leer_necesidades(cuerpo_pr, repo, issues)
+              try:
+                  en_diff = tests_por_criterio(diff.lineas_agregadas())
+              except DiffIlegible as exc:
+                  en_diff = {}
+                  problemas.append(f"no se pudo leer el diff del PR ({exc})")
+              filas = armar_matriz(criterios, en_diff, suite, runtime)
+              informe = Informe("", "", "", [str(n) for n in necesidades], filas, suite.corridos if suite else None)
+              if suite is None or suite.corridos == 0:
+                  codigo = f" (pytest terminó con código de salida {codigo_suite})" if codigo_suite else ""
+                  informe.resultado, informe.motivo = "rojo", "sin_tests_corridos"
+                  informe.detalle = "la suite no corrió ningún test" + codigo
+              elif problemas:
+                  informe.resultado, informe.motivo, informe.detalle = "neutral", "no_medido", "; ".join(problemas)
+              elif faltan := [f for f in filas if f.estado == SIN_EVIDENCIA]:
+                  informe.resultado, informe.motivo = "rojo", "criterios_sin_evidencia"
+                  informe.detalle = "; ".join(f"criterio {f.n} de {f.necesidad}: {f.motivo}" for f in faltan)
+              else:
+                  informe.resultado, informe.motivo = "verde", "ok"
+                  informe.detalle = f"{len(filas)} criterios con evidencia"
+              return informe
+
+
+          # --- Salida -------------------------------------------------------------------------------
+
+
+          def _celda(texto: str) -> str:
+              return texto.replace("|", "\\|").replace("\n", " ")
+
+
+          def resumen_markdown(informe: Informe) -> str:
+              lineas = [
+                  "## Criterios de la necesidad",
+                  "",
+                  f"**Resultado:** {informe.resultado} (`{informe.motivo}`): {_celda(informe.detalle)}",
+                  "",
+              ]
+              if informe.criterios:
+                  lineas += ["| Necesidad | # | Criterio | Evidencia | Tests del PR |", "|---|---|---|---|---|"]
+                  for f in informe.criterios:
+                      tests = ", ".join(f"`{t}`" for t in f.tests) or "—"
+                      lineas.append(f"| {f.necesidad} | {f.n} | {_celda(f.texto)} | {f.estado} | {tests} |")
+                  lineas.append("")
+              lineas.append(
+                  "RUNTIME: pasó contra un ambiente · CODE: su test del PR pasó en este CI · SIN-EVIDENCIA: ninguna de las dos."
+              )
+              return "\n".join(lineas) + "\n"
+
+
+          def _anotar(informe: Informe) -> None:
+              nivel = {"verde": "notice", "rojo": "error", "neutral": "warning"}[informe.resultado]
+              texto = f"criterios {informe.resultado} ({informe.motivo}): {informe.detalle}"
+              print(f"::{nivel}::{texto.replace('%', '%25').replace(chr(10), '%0A')}")
+
+
+          def _leer_json(ruta: str) -> object:
+              try:
+                  return json.loads(Path(ruta).read_text(encoding="utf-8"))
+              except (OSError, ValueError):
+                  return {}
+
+
+          def main(
+              entorno: dict[str, str],
+              issues: FuenteIssues | None = None,
+              diff: FuenteDiff | None = None,
+          ) -> int:
+              runtime_ruta = entorno.get("RUNTIME_RESULTADO", "")
+              informe = evaluar(
+                  cuerpo_pr=entorno.get("PR_BODY", ""),
+                  repo=entorno["REPO"],
+                  issues=issues or GitHubIssues(entorno.get("API_URL", "https://api.github.com"), entorno.get("GH_TOKEN", "")),
+                  diff=diff or GitDiff(entorno.get("GITHUB_WORKSPACE", ".")),
+                  suite=leer_junit(Path(entorno.get("JUNIT", ""))),
+                  runtime=leer_runtime(_leer_json(runtime_ruta)) if runtime_ruta else set(),
+                  codigo_suite=entorno.get("PYTEST_CODIGO", ""),
+              )
+              Path(entorno["MATRIZ_JSON"]).write_text(
+                  json.dumps(informe.a_json(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+              )
+              with open(entorno["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as resumen:
+                  resumen.write(resumen_markdown(informe))
+              with open(entorno["GITHUB_OUTPUT"], "a", encoding="utf-8") as salida:
+                  salida.write(f"resultado={informe.resultado}\nmotivo={informe.motivo}\n")
+              _anotar(informe)
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(dict(os.environ)))
+
+      - name: Subir la matriz
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.suite.outputs.artefacto }}
+          path: ${{ runner.temp }}/criterios-matriz.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Veredicto
+        env:
+          RESULTADO: ${{ steps.matriz.outputs.resultado }}
+          MOTIVO: ${{ steps.matriz.outputs.motivo }}
+        run: |
+          # GitHub Actions no tiene conclusión «neutral» para un job: neutral (no medido)
+          # termina en failure para no contar nunca como verde. El motivo distingue los
+          # casos en la anotación, el resumen y el artefacto.
+          case "$RESULTADO" in
+            verde)
+              echo "Todos los criterios de la necesidad tienen evidencia." ;;
+            rojo)
+              echo "Criterios: rojo ($MOTIVO). Detalle en el resumen del job y en el artefacto."
+              exit 1 ;;
+            neutral)
+              echo "Criterios: neutral ($MOTIVO). No se pudo medir: no cuenta como verde."
+              exit 1 ;;
+            *)
+              echo "::error::La matriz por criterio no dio resultado."
+              exit 1 ;;
+          esac

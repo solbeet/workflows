@@ -41,7 +41,7 @@ NECESIDAD = """## Criterios de aceptación
 """
 
 
-def tests_ca(*numeros: int) -> str:
+def codigo_tests_ca(*numeros: int) -> str:
     return "".join(f"\n\ndef test_ca_7_{n}_criterio():\n    assert {n} == {n}\n" for n in numeros)
 
 
@@ -164,13 +164,13 @@ def correr_job(repo: str, api_url: str) -> tuple[int, dict[str, str], pathlib.Pa
 CASOS = {
     "sin-tests": ({}, ("tests/test_main.py", "tests/test_postgres.py"), "rojo", "sin_tests_corridos", ""),
     "criterio-faltante": (
-        {"tests/test_ca.py": tests_ca(1, 2, 3)},
+        {"tests/test_ca.py": codigo_tests_ca(1, 2, 3)},
         (),
         "rojo",
         "criterios_sin_evidencia",
         "criterio 4 de org/app#7",
     ),
-    "todos-presentes": ({"tests/test_ca.py": tests_ca(1, 2, 3, 4)}, (), "verde", "ok", ""),
+    "todos-presentes": ({"tests/test_ca.py": codigo_tests_ca(1, 2, 3, 4)}, (), "verde", "ok", ""),
 }
 
 

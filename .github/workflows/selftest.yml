@@ -84,6 +84,9 @@ jobs:
       - name: Casos de mutación (uv y mutmut de verdad sobre el fixture)
         run: uv run --no-project --with pyyaml==6.0.2 python tests/mutacion/test_mutacion.py
 
+      - name: Casos de criterios (matriz por criterio, suite sin tests, criterio faltante, todos presentes)
+        run: uv run --directory tests/criterios --frozen pytest
+
   ci:
     name: ci
     uses: ./.github/workflows/python-react.yml
@@ -109,14 +112,21 @@ jobs:
 
   gates:
     name: gates
-    # Ejercita los cuatro jobs contra el fixture: cobertura del cambio, migraciones
+    # Ejercita los cinco jobs contra el fixture: cobertura del cambio, migraciones
     # (el fixture no usa Alembic: tiene que saltear con aviso), contrato con la app
-    # del fixture levantada en el runner y dependencias sobre sus lockfiles.
+    # del fixture levantada en el runner y dependencias sobre sus lockfiles. El job
+    # criterios cuenta los test_ca_<issue>_<n>_* de tests/criterios contra la
+    # necesidad que cierra el PR (informativo: no es check requerido de este repo).
     if: github.event_name == 'pull_request'
     uses: ./.github/workflows/gates.yml
+    # El caller cubre los permisos de todos los jobs: criterios lee el issue.
+    permissions:
+      contents: read
+      issues: read
     with:
       backend-dir: tests/fixture/backend
       contract-app: app.main:app
+      criterios-dir: tests/criterios
 
   guardia-tests:
     name: guardia-tests

@@ -3,13 +3,19 @@
 # "solbeet / cobertura-cambio", "solbeet / migraciones", "solbeet / contrato" y
 # "solbeet / dependencias". Solo frenan lo que introduce el PR: lo que ya fallaba
 # en la rama base se informa como aviso.
+# "solbeet / criterios" entra como informativo: cuenta un test test_ca_<issue>_<n>_*
+# por criterio de la necesidad que cierra el PR (Closes #N) y publica la matriz
+# RUNTIME / CODE / SIN-EVIDENCIA. Se exige en el ruleset cuando el repo lo decida.
 name: verificacion
 
 on:
   pull_request:
 
+# issues: read lo pide el job criterios (lee la necesidad). Sin él, el workflow
+# entero falla al arrancar: el caller cubre los permisos de todos los jobs.
 permissions:
   contents: read
+  issues: read
 
 jobs:
   gates:
