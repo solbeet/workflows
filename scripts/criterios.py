@@ -46,7 +46,9 @@ _VINCULO = re.compile(
 )
 _ENCABEZADO = re.compile(r"^#{1,6}\s+(.*)$")
 _BULLET = re.compile(r"^[-*]\s+\[[ xX]\]\s+(.+?)\s*$")
-_TEST_CA = re.compile(r"\b(test_ca_(\d+)_(\d+)\w*)")
+# Solo definiciones: `def`/`async def` de Python o `test(...)`/`it(...)` de JS/TS. Un
+# comentario o un doc que nombra un test existente no es una prueba que agregue el PR.
+_TEST_CA = re.compile(r"^\s*(?:(?:async\s+)?def\s+|(?:test|it)\s*\(\s*['\"`])(test_ca_(\d+)_(\d+)\w*)")
 _CA_RUNTIME = re.compile(r"^CA-(\d+)-(\d+)$", re.IGNORECASE)
 
 
@@ -189,12 +191,13 @@ def leer_criterios(cuerpo_issue: str) -> list[str]:
 
 
 def tests_por_criterio(diff: str) -> dict[tuple[int, int], set[str]]:
-    """Nombres ``test_ca_<issue>_<n>*`` en las líneas que agrega el diff."""
+    """Tests ``test_ca_<issue>_<n>*`` que define el diff en las líneas que agrega."""
     encontrados: dict[tuple[int, int], set[str]] = {}
     for linea in diff.splitlines():
         if not linea.startswith("+") or linea.startswith("+++"):
             continue
-        for m in _TEST_CA.finditer(linea):
+        m = _TEST_CA.match(linea[1:])
+        if m:
             encontrados.setdefault((int(m.group(2)), int(m.group(3))), set()).add(m.group(1))
     return encontrados
 

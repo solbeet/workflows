@@ -353,6 +353,6 @@ def test_tests_por_criterio_solo_cuenta_definiciones():
         "+# ver test_ca_7_1_viejo, que ya pasaba\n"
         "+Cubierto por `test_ca_7_2_otro` en el README.\n"
         "+    async def test_ca_7_3_asincrono():\n"
-        "+  it(\"test_ca_7_4_js\", async () => {})\n"
+        '+  it("test_ca_7_4_js", async () => {})\n'
     )
     assert criterios.tests_por_criterio(diff) == {(7, 3): {"test_ca_7_3_asincrono"}, (7, 4): {"test_ca_7_4_js"}}
