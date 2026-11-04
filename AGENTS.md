@@ -13,9 +13,12 @@ Workflows reutilizables de GitHub Actions para los repos de clientes. El repo es
 .github/dependabot.yml actualiza las actions fijadas por SHA y las deps del fixture
 examples/              workflows que copia un repo cliente (también se lintean)
 scripts/lint-workflows.sh  actionlint en versión fijada, igual que en CI
+scripts/criterios.py       matriz por criterio del job criterios de gates.yml (fuente; va incrustado en el YAML)
+scripts/incrustar-criterios.py  copia scripts/criterios.py al paso «Matriz por criterio» de gates.yml
 tests/fixture/backend  FastAPI mínimo (uv) que ejercita el job backend
 tests/fixture/frontend JS + tsc + node --test que ejercita el job frontend
 tests/hygiene/         prueba la lógica de pr-hygiene.yml contra repos git temporales
+tests/criterios/       proyecto uv con pytest: tests de scripts/criterios.py y del job criterios (test_ca_33_<n>_*)
 docs/                  arquitectura, desarrollo, estado, ADRs
 ```
 
@@ -26,6 +29,9 @@ Todos desde la raíz del repo. Requieren `git`, `curl`, `uv` y Node 20+ con npm.
 ```bash
 # Lint de workflows y ejemplos (descarga actionlint 1.7.12 verificado a ~/.cache)
 scripts/lint-workflows.sh
+
+# Matriz por criterio: script y job criterios de punta a punta (uv y pytest de verdad)
+uv run --directory tests/criterios --frozen pytest
 
 # Casos de pr-hygiene (deben fallar los que tienen que fallar)
 uv run --no-project --with pyyaml==6.0.2 python tests/hygiene/test_pr_hygiene.py
@@ -67,7 +73,8 @@ No hay build ni paquete: "publicar" es crear tags (ver `docs/desarrollo.md#publi
 
 ## Trampas conocidas
 
-- Los workflows reutilizables corren con el checkout del repo **que llama**, no de este. No se pueden usar scripts de este repo desde `run:`; por eso la lógica va inline.
+- Los workflows reutilizables corren con el checkout del repo **que llama**, no de este. No se pueden usar scripts de este repo desde `run:`; por eso la lógica va inline. Excepción: el job `criterios` de `gates.yml` lleva incrustado `scripts/criterios.py`; se edita el script y se corre `python3 scripts/incrustar-criterios.py` (tests/criterios falla si difieren).
+- Un job de un reutilizable con `permissions:` que el caller no da hace fallar al workflow entero al arrancar, aunque ese job tenga `if:` falso. `gates.yml` pide `issues: read` por el job `criterios`.
 - Desde `selftest.yml` se llaman con ruta local (`./.github/workflows/x.yml`), así cada PR prueba su propia versión. Los ejemplos usan `@v1`.
 - El nombre del check es `<job que llama> / <job reutilizable>`. Renombrar un job rompe la protección de rama de todos los clientes.
 - `services` no acepta `if:`. Para que Postgres sea opcional se usa imagen vacía (`image: ''`), que GitHub interpreta como "no levantar".

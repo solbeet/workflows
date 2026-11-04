@@ -1,0 +1,22 @@
+[project]
+name = "tests-criterios"
+version = "0.1.0"
+description = "Tests de scripts/criterios.py y del job criterios de gates.yml (pytest, para que el propio job los cuente)."
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "pyyaml==6.0.2"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]

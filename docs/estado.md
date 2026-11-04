@@ -2,6 +2,17 @@
 
 Última actualización: 2026-10-19 · Publicada: v1.8.0 (`mutacion.yml`, V12), tag creado el 2026-10-19 sobre c549e01; `v1` apunta a v1.8.0. Antes, también taggeadas: v1.7.0 (input `runner`, C3, y construcción nativa por arquitectura, C4; 2026-10-19, 556059f), v1.6.0 (`rojo-verde.yml`, V3; 2026-10-14), v1.5.0 (`guardia-tests.yml`, V2; 2026-10-13) y v1.4.0 (`gates.yml`, V1; 2026-10-13); ver abajo. v1.3.0 (`imagen.yml` con la revisión completa como anotación del índice y outputs `tag`/`revision`; actionlint y selftest sin hallazgos; verificado en ghcr.io: el índice OCI de `ghcr.io/solbeet-pruebas/app-prueba-api:sha-fa1e676`, construido por `solbeet-pruebas/app-prueba` con `@v1` = v1.3.0, trae `org.opencontainers.image.revision` = sha completo, consultado por la API del registro; corrida multi-arch en menos de 2 min). Antes: v1.2.0 (multi-arquitectura)
 
+## Sin publicar: job `criterios` en `gates.yml` (V22)
+
+| Qué | Cómo | Resultado |
+|---|---|---|
+| Script, un test por criterio de #33 | `uv run --directory tests/criterios --frozen pytest` (macOS, Python 3.12), GitHub y git con fakes | 30/30 en `test_criterios.py` |
+| Job de punta a punta, tres fixtures | `tests/criterios/test_criterios_workflow.py`: pasos del YAML con uv y pytest de verdad sobre el fixture, API de GitHub simulada | suite sin tests → rojo `sin_tests_corridos`; criterio 4 sin prueba → rojo nombrándolo; los cuatro presentes → verde, cuatro CODE y JSON |
+| Copia incrustada, permisos y ejemplo | mismos tests | copia = script; job con `contents`/`issues` de solo lectura; `examples/gates.yml` y `selftest / gates` dan `issues: read` |
+| actionlint | `scripts/lint-workflows.sh` | sin hallazgos |
+
+No verificado todavía: la corrida en un runner de GitHub (la hace `selftest / gates` en el PR); el estado RUNTIME con un `resultado.json` real de staging (probado con fixtures del esquema 1); la lectura de una necesidad en otro repo privado (el `GITHUB_TOKEN` solo ve el repo del PR: queda `no_medido`).
+
 ## v1.8.0 (2026-10-19): `mutacion.yml`
 
 | Qué | Cómo | Resultado |

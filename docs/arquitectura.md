@@ -56,7 +56,7 @@ Cada workflow reutilizable es un archivo autocontenido: no depende de otros arch
 - No despliega: no hay jobs de build de imágenes ni de deploy.
 - No guarda ni provee secretos: los secretos son del repo cliente.
 - No configura la protección de rama: el README dice qué checks marcar, pero se configura en cada repo.
-- No ejecuta scripts de este repo dentro de los workflows reutilizables: la lógica está inline en cada YAML.
+- No ejecuta scripts de este repo dentro de los workflows reutilizables: la lógica está inline en cada YAML. El job `criterios` de `gates.yml` lleva una copia incrustada de `scripts/criterios.py`, generada por `scripts/incrustar-criterios.py` y verificada por `tests/criterios` ([ADR 0010](decisiones/0010-matriz-por-criterio.md)).
 - No escanea toda la historia del repo cliente: solo los commits del PR.
 - No soporta otros gestores de paquetes (pip, poetry, pnpm, yarn) ni otros eventos que `pull_request` en `pr-hygiene`.
 - El revisor con Claude no modifica código ni hace push; solo lee y comenta.
