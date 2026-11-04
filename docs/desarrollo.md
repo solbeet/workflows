@@ -46,6 +46,11 @@ uv run --no-project --with pyyaml==6.0.2 python tests/rojo_verde/test_rojo_verde
 # 2e. Mutación informativa de punta a punta (uv y mutmut; la API de GitHub es un servidor local)
 uv run --no-project --with pyyaml==6.0.2 python tests/mutacion/test_mutacion.py
 
+# 2f. Matriz por criterio: scripts/criterios.py y el job criterios de punta a punta (uv y pytest)
+uv run --directory tests/criterios --frozen pytest
+#     Después de editar scripts/criterios.py, actualizar la copia de gates.yml:
+python3 scripts/incrustar-criterios.py
+
 # 3. Fixture backend (los mismos comandos que el job backend)
 (cd tests/fixture/backend && uv sync --frozen && uv run --frozen ruff check . \
   && uv run --frozen ruff format --check . && uv run --frozen pyright && uv run --frozen pytest)

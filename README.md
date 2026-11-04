@@ -16,7 +16,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`claude-review.yml`](.github/workflows/claude-review.yml) | Revisor independiente de PRs con `anthropics/claude-code-action`: spec, tests, bugs y seguridad, evidencia. Deja comentarios inline y un resumen con veredicto | `review` |
 | [`pr-hygiene.yml`](.github/workflows/pr-hygiene.yml) | Secciones de evidencia en el cuerpo del PR, aviso por diff grande, archivos `.rej`, marcadores de conflicto y escaneo de secretos con gitleaks | `hygiene`, `secret-scan` |
 | [`imagen.yml`](.github/workflows/imagen.yml) | Construye y publica la imagen de un servicio en `ghcr.io/<owner>/<imagen>` con tag = versión semver sin `v` y `sha-<sha7>` (sin `latest`); el sha completo va como label y anotación `org.opencontainers.image.revision` (outputs `tag` y `revision`). Construye con QEMU en un runner o, con `runner-arm64`, cada arquitectura en su runner nativo. Usa el `GITHUB_TOKEN` con `packages: write` | `imagen` (no es check requerido) |
-| [`gates.yml`](.github/workflows/gates.yml) | Gates sobre el diff del PR (fase V): cobertura de las líneas cambiadas, migraciones (pytest-alembic + squawk), contrato de la API (Schemathesis) y dependencias vulnerables (OSV-Scanner). Solo frena lo que introduce el PR | `cobertura-cambio`, `migraciones`, `contrato`, `dependencias` |
+| [`gates.yml`](.github/workflows/gates.yml) | Gates sobre el diff del PR (fase V): cobertura de las líneas cambiadas, migraciones (pytest-alembic + squawk), contrato de la API (Schemathesis) y dependencias vulnerables (OSV-Scanner). Solo frena lo que introduce el PR. Más la matriz por criterio de la necesidad (informativa) | `cobertura-cambio`, `migraciones`, `contrato`, `dependencias`, `criterios` |
 | [`guardia-tests.yml`](.github/workflows/guardia-tests.yml) | Guardia de tests (fase V): frena el PR que borra, debilita o saltea tests existentes, o toca tests de aceptación, salvo dale de una persona (label) | `tests` |
 | [`rojo-verde.yml`](.github/workflows/rojo-verde.yml) | Rojo → verde (fase V): cada test nuevo de Python tiene que fallar sin el cambio y pasar con él | `rojo-verde` |
 | [`mutacion.yml`](.github/workflows/mutacion.yml) | Mutación informativa (fase V): puntaje de mutmut sobre los archivos de Python del diff y los mutantes que los tests no detectaron, en un comentario del PR; no bloquea | `mutacion` |
@@ -156,8 +156,9 @@ Cuatro checks pensados para ser requeridos antes de prender el merge automático
 | `contract-max-examples` | number | `30` | no | Casos por operación en Schemathesis. |
 | `contract-checks` | string | `not_a_server_error,response_schema_conformance,content_type_conformance` | no | Checks de Schemathesis. |
 | `vuln-min-severity` | number | `7` | no | CVSS desde el que una vulnerabilidad nueva con arreglo frena. |
+| `criterios-dir` | string | `""` | no | Directorio donde el job `criterios` corre la suite con pytest (`pyproject.toml` y `uv.lock`). Vacío = `backend-dir`. |
 
-Secretos: ninguno. Permisos: `contents: read`. Output del job `migraciones`: `destructiva` (`true` si una migración nueva tiene una operación de las reglas que frenan; señal para clasificar el PR como zona alta).
+Secretos: ninguno. Permisos: `contents: read`; el job `criterios` pide además `issues: read` para leer la necesidad, así que **el caller tiene que dar `contents: read` e `issues: read`** (si no, GitHub rechaza el workflow entero al arrancar). Output del job `migraciones`: `destructiva` (`true` si una migración nueva tiene una operación de las reglas que frenan; señal para clasificar el PR como zona alta).
 
 | Job | Qué hace | Frena si | Avisa (no frena) |
 |---|---|---|---|
@@ -165,6 +166,19 @@ Secretos: ninguno. Permisos: `contents: read`. Output del job `migraciones`: `de
 | `migraciones` | si hay `alembic.ini`: SQL offline de cada revisión nueva + squawk; pytest-alembic (`single_head_revision`, `upgrade`, `up_down_consistency`, `model_definitions_match_ddl`) contra Postgres | una migración nueva borra, renombra o cambia el tipo de algo existente; una prueba de pytest-alembic falla con el PR y pasaba en la base | locks largos, timeouts, estilo; pruebas que ya fallaban en la base |
 | `contrato` | levanta la base y el PR en el runner (Postgres + `alembic upgrade head` + uvicorn) y corre Schemathesis sobre los dos | un fallo de contrato (5xx, respuesta fuera del esquema) que no está en la base | fallos heredados; antes de declarar uno nuevo se reenvía a la base la misma petición y se insiste en esa operación |
 | `dependencias` | OSV-Scanner sobre los lockfiles del PR y de la base | una vulnerabilidad nueva con CVSS ≥ `vuln-min-severity` y versión arreglada | nuevas sin arreglo o de menor severidad; heredadas |
+| `criterios` | corre la suite de `criterios-dir` con JUnit, lee los criterios de la necesidad que cierra el PR y arma la matriz por criterio (abajo) | la suite no corrió ningún test (`sin_tests_corridos`, aunque pytest salga 0 o 5); un criterio sin un `test_ca_<issue>_<n>_*` del PR que haya pasado (`criterios_sin_evidencia`); no se pudo medir (`neutral`, `no_medido`) | — |
+
+#### Matriz por criterio (job `criterios`)
+
+Informativo en esta versión: cada repo decide cuándo lo pone en su ruleset. Lo cuenta un script, sin modelo ([`scripts/criterios.py`](scripts/criterios.py), [ADR 0010](docs/decisiones/0010-matriz-por-criterio.md)):
+
+1. La necesidad es el issue que cierra el PR (`Closes #N`, `Fixes owner/repo#N`, …). Sus criterios son los bullets `- [ ]` (o `- [x]`) de primer nivel bajo el primer encabezado que diga «criterio»; el criterio `n` es el `n`-ésimo bullet.
+2. Cada criterio necesita al menos un test `test_ca_<issue>_<n>_*` en las líneas que agrega el PR (Python, JS o lo que sea: se busca el nombre).
+3. Estado por criterio: **RUNTIME** si pasó contra un ambiente (el `resultado.json` de la verificación en staging, `e2e.criterios`, sin fallos de ese criterio); **CODE** si su test del PR pasó en la suite del job; **SIN-EVIDENCIA** si no.
+4. Resultado: `verde` si todos los criterios son RUNTIME o CODE; `rojo` con `sin_tests_corridos` o `criterios_sin_evidencia` (nombra cada criterio); `neutral` con `no_medido` si el PR no cierra ninguna necesidad, si no se pudo leer o si no tiene criterios legibles. GitHub Actions no tiene conclusión neutral para un job: `neutral` termina en failure para no contar nunca como verde; el motivo lo distingue.
+5. La matriz sale en el resumen del job y como artefacto `criterios-<criterios-dir>` (`criterios-matriz.json`, esquema 1). En el PR el estado RUNTIME no aparece todavía (el cambio llega a staging después del merge); quien tenga el `resultado.json` de staging corre el script con `RUNTIME_RESULTADO=<ruta>` para rearmarla.
+
+El cuerpo del PR se lee del evento: si se edita el `Closes`, hay que volver a correr el job.
 
 Herramientas fijadas: squawk 2.66.0 y OSV-Scanner 2.6.0 (binarios con SHA-256), coverage 7.16.2, diff-cover 10.6.0, pytest-alembic 0.13.0, Schemathesis 4.28.0, uvicorn 0.53.0 (por PyPI, versión exacta). El cliente no tiene que declararlas en sus dependencias.
 
@@ -298,6 +312,7 @@ Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que lla
 | `solbeet / tests` | sí, antes de prender el merge automático (con `examples/guardia-tests.yml`) |
 | `solbeet / rojo-verde` | sí, antes de prender el merge automático (con `examples/rojo-verde.yml`) |
 | `solbeet / mutacion` | **no**: es informativo hasta medirlo en 20 PRs (ADR 0009) |
+| `solbeet / criterios` | **no** por ahora: entra como informativo y cada repo lo exige cuando decida (ADR 0010) |
 | `claude-review / review` | **no**: es informativo. Depende de un servicio externo y de secretos que los forks no reciben |
 
 Si el repo cliente le pone otro id (o `name:`) al job que llama, la primera parte del nombre cambia. Los nombres de los jobs de este repo (`backend`, `frontend`, `review`, `hygiene`, `secret-scan`) son parte del contrato y solo cambian en una versión mayor.
@@ -319,5 +334,5 @@ Procedimiento completo en [`docs/desarrollo.md`](docs/desarrollo.md#publicar-una
 | [`docs/arquitectura.md`](docs/arquitectura.md) | Componentes, flujo, qué consume y qué entrega, límites |
 | [`docs/desarrollo.md`](docs/desarrollo.md) | Entorno, pruebas, cómo probar un cambio de punta a punta, publicar una versión, problemas comunes |
 | [`docs/estado.md`](docs/estado.md) | Qué funciona y cómo se verificó, qué no se probó, pendientes |
-| [`docs/decisiones/`](docs/decisiones/) | ADRs: [0001 repo público](docs/decisiones/0001-repo-publico.md), [0002 nombres de jobs y versionado](docs/decisiones/0002-contrato-de-nombres-y-versionado.md), [0003 escáner de secretos y versiones fijadas](docs/decisiones/0003-escaner-de-secretos-y-versiones-fijadas.md), [0004 revisor con Claude](docs/decisiones/0004-revisor-con-claude.md), [0005 licencia propietaria](docs/decisiones/0005-licencia-propietaria.md) |
+| [`docs/decisiones/`](docs/decisiones/) | ADRs: [0001 repo público](docs/decisiones/0001-repo-publico.md), [0002 nombres de jobs y versionado](docs/decisiones/0002-contrato-de-nombres-y-versionado.md), [0003 escáner de secretos y versiones fijadas](docs/decisiones/0003-escaner-de-secretos-y-versiones-fijadas.md), [0004 revisor con Claude](docs/decisiones/0004-revisor-con-claude.md), [0005 licencia propietaria](docs/decisiones/0005-licencia-propietaria.md), [0010 matriz por criterio](docs/decisiones/0010-matriz-por-criterio.md) |
 | [`CHANGELOG.md`](CHANGELOG.md) | Cambios por versión |

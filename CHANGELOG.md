@@ -2,6 +2,17 @@
 
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado [semver](https://semver.org/lang/es/) con tag mayor móvil (ver README, "Versionado").
 
+## [Sin publicar]
+
+### Agregado
+
+- `gates.yml` (fase V, ítem V22, solbeet/workflows#33): job `criterios`, informativo. Corre la suite de `criterios-dir` con JUnit, lee los criterios de la necesidad que cierra el PR y exige un `test_ca_<issue>_<n>_*` del PR que haya pasado por criterio. Rojo con `sin_tests_corridos` si la suite no corrió ningún test (aunque pytest salga 0 o 5) y con `criterios_sin_evidencia` si falta uno; neutral con `no_medido` (termina en failure) sin necesidad o sin criterios legibles. Matriz RUNTIME / CODE / SIN-EVIDENCIA en el resumen y como artefacto JSON. Input nuevo `criterios-dir`. [ADR 0010](docs/decisiones/0010-matriz-por-criterio.md).
+- `scripts/criterios.py` (fuente del paso, incrustado en `gates.yml` con `scripts/incrustar-criterios.py`) y `tests/criterios/` (pytest: un test por criterio de #33, tres fixtures del job de punta a punta), en `selftest / hygiene-logic`; `selftest / gates` corre el job sobre el propio PR.
+
+### Cambia para los callers
+
+- **`gates.yml` pide `issues: read`** (job `criterios`). Un caller que solo da `contents: read` falla al arrancar. `examples/gates.yml` ya lo da; la plantilla (`verificacion.yml`) ya lo daba. ADR 0002 §4 lo clasifica como incompatible: la versión (v1.9.0 o v2.0.0) se decide al taggear (ADR 0010, «Consecuencias»).
+
 ## [1.8.0] - 2026-10-19
 
 Tag `v1.8.0` sobre c549e01 (merge de #29), creado el 2026-10-19. El tag mayor `v1` apunta a v1.8.0 (workflow nuevo, compatible).

@@ -41,7 +41,7 @@ zonas:
 
   - id: tests-de-gates
     nombre: Tests de los controles del CI
-    descripcion: Prueban la higiene de PR (secciones obligatorias, secretos), los gates sobre el diff, la guardia de tests, el rojo-verde y la mutación; aflojar uno deja pasar lo que el CI frena
+    descripcion: Prueban la higiene de PR (secciones obligatorias, secretos), los gates sobre el diff, la guardia de tests, el rojo-verde, la mutación y la matriz por criterio; aflojar uno deja pasar lo que el CI frena
     nivel: alto
     rutas:
       - "tests/hygiene/**"
@@ -49,6 +49,7 @@ zonas:
       - "tests/guardia/**"
       - "tests/rojo_verde/**"
       - "tests/mutacion/**"
+      - "tests/criterios/**"
 
   - id: ci
     nombre: Workflows reutilizables y CI de este repo
@@ -72,6 +73,14 @@ zonas:
     nivel: alto
     categoria: ci
     rutas: ["scripts/lint-workflows.sh"]
+
+  - id: scripts-del-ci
+    nombre: Lógica incrustada en los workflows
+    descripcion: scripts/criterios.py va copiado dentro de gates.yml (job criterios) y corre en todos los repos de los clientes
+    nivel: alto
+    categoria: ci
+    autonomia_max: persona
+    rutas: ["scripts/criterios.py", "scripts/incrustar-criterios.py"]
 
   - id: politica
     nombre: Reglas de los agentes
