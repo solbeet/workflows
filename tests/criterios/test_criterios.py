@@ -345,3 +345,14 @@ def entorno_main(tmp_path, *, casos, pytest_codigo="0"):
 def leer_output(tmp_path) -> dict[str, str]:
     lineas = (tmp_path / "output.txt").read_text().splitlines()
     return dict(linea.split("=", 1) for linea in lineas if "=" in linea)
+
+
+def test_tests_por_criterio_solo_cuenta_definiciones():
+    # Un comentario o un doc que nombra un test existente no es una prueba que agregue el PR.
+    diff = (
+        "+# ver test_ca_7_1_viejo, que ya pasaba\n"
+        "+Cubierto por `test_ca_7_2_otro` en el README.\n"
+        "+    async def test_ca_7_3_asincrono():\n"
+        "+  it(\"test_ca_7_4_js\", async () => {})\n"
+    )
+    assert criterios.tests_por_criterio(diff) == {(7, 3): {"test_ca_7_3_asincrono"}, (7, 4): {"test_ca_7_4_js"}}
