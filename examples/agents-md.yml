@@ -1,0 +1,23 @@
+# Ejemplo para un repo cliente: copiar a .github/workflows/agents-md.yml.
+# Check resultante: "agents-md / verificar". No es check requerido (lo decide una persona).
+# Falla si el bloque «Cómo se programa» de AGENTS.md difiere de lo generado por la versión del
+# método que declara, o si CLAUDE.md no apunta a AGENTS.md. Hace falta el secreto
+# METODO_LECTURA_TOKEN (lectura de solbeet/solbeet-metodo) en el repo o en la organización.
+name: agents-md
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  agents-md:
+    uses: solbeet/workflows/.github/workflows/agents-md.yml@v1
+    with:
+      # CI en el cluster (ARC) si el repo define SOLBEET_RUNNER; vacío = ubuntu-latest.
+      runner: ${{ vars.SOLBEET_RUNNER }}
+    secrets:
+      METODO_LECTURA_TOKEN: ${{ secrets.METODO_LECTURA_TOKEN }}

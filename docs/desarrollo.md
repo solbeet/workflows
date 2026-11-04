@@ -46,6 +46,9 @@ uv run --no-project --with pyyaml==6.0.2 python tests/rojo_verde/test_rojo_verde
 # 2e. Mutación informativa de punta a punta (uv y mutmut; la API de GitHub es un servidor local)
 uv run --no-project --with pyyaml==6.0.2 python tests/mutacion/test_mutacion.py
 
+# 2g. agents-md.yml: versión declarada, llamada a uvx (falso en el PATH), token y contrato
+uv run --no-project --with pyyaml==6.0.2 python tests/agents_md/test_agents_md.py
+
 # 2f. Matriz por criterio: scripts/criterios.py y el job criterios de punta a punta (uv y pytest)
 uv run --directory tests/criterios --frozen pytest
 #     Después de editar scripts/criterios.py, actualizar la copia de gates.yml:
