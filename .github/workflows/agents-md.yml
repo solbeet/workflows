@@ -1,0 +1,85 @@
+# Verifica que el bloque «Cómo se programa» del AGENTS.md del repo sea igual a lo que genera
+# la versión del método que declara, y que CLAUDE.md apunte a AGENTS.md sin repetir reglas.
+#
+# La versión no se pasa como input: se lee del marcador del propio bloque
+# (`<!-- metodo:agents-md version=X.Y.Z ... -->`), así no hay dos lugares que puedan diverger.
+# La misma versión elige la CLI (`metodo` del tag vX.Y.Z) y las reglas contra las que se compara.
+#
+# solbeet-metodo es un repo privado: el `GITHUB_TOKEN` del repo que llama no lo lee. Hace falta
+# el secreto `METODO_LECTURA_TOKEN` (solo lectura de ese repo). Sin él, o con un PR de un fork
+# (no recibe secretos), el check termina en `no_medido` (código 3): nunca pasa sin comparar.
+# Ver docs/decisiones/0011-agents-md-con-token-de-lectura.md.
+# El nombre del job (`verificar`) es parte del contrato: el check es `<job que llama> / verificar`.
+name: agents-md
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner (label de runs-on) donde corre el job. Vacío = ubuntu-latest. Para el scale set propio, pasar vars.SOLBEET_RUNNER.
+        type: string
+        default: ubuntu-latest
+    secrets:
+      METODO_LECTURA_TOKEN:
+        description: Token con lectura de solbeet/solbeet-metodo (repo privado). Sin él el check termina en no_medido.
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agents-md-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    name: verificar
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # Solo se usa para uvx; no hay lockfile que cachear.
+          enable-cache: false
+
+      - name: Leer la versión que declara AGENTS.md
+        id: version
+        run: |
+          if [ ! -f AGENTS.md ]; then
+            echo "::error file=AGENTS.md::Falta AGENTS.md: el repo tiene que llevar el bloque «Cómo se programa»."
+            exit 1
+          fi
+          marca=$(grep -m1 -E '^<!-- metodo:agents-md version=' AGENTS.md || true)
+          if [ -z "$marca" ]; then
+            echo "::error file=AGENTS.md::AGENTS.md no tiene el bloque «Cómo se programa» (marcador metodo:agents-md)."
+            exit 1
+          fi
+          version=$(printf '%s' "$marca" | sed -E 's/^<!-- metodo:agents-md version=([^ ]+).*/\1/')
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error file=AGENTS.md::La versión del bloque ('$version') no es X.Y.Z; 'actual' solo vale dentro de solbeet-metodo."
+            exit 1
+          fi
+          echo "Versión del método declarada: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verificar el bloque
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          # GH_TOKEN lo lee la CLI para bajar las reglas del tag por la API de GitHub.
+          GH_TOKEN: ${{ secrets.METODO_LECTURA_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::agents-md: no_medido. No llegó METODO_LECTURA_TOKEN (secreto con lectura de solbeet-metodo; los PRs de forks no reciben secretos). El check no pasa sin comparar."
+            exit 3
+          fi
+          uvx --from "git+https://x-access-token:${GH_TOKEN}@github.com/solbeet/solbeet-metodo@v${VERSION}" \
+            metodo agents-md verificar

@@ -9,6 +9,7 @@ Workflows reutilizables de GitHub Actions para los repos de clientes. El repo es
   python-react.yml     CI reutilizable (jobs: backend, frontend)
   claude-review.yml    revisor con Claude (job: review)
   pr-hygiene.yml       higiene de PR y secretos (jobs: hygiene, secret-scan)
+  agents-md.yml        bloque «Cómo se programa» de AGENTS.md al día con el método (job: verificar; secreto METODO_LECTURA_TOKEN)
   selftest.yml         CI de este repo: actionlint + fixture + casos de pr-hygiene
 .github/dependabot.yml actualiza las actions fijadas por SHA y las deps del fixture
 examples/              workflows que copia un repo cliente (también se lintean)
@@ -18,6 +19,7 @@ scripts/incrustar-criterios.py  copia scripts/criterios.py al paso «Matriz por 
 tests/fixture/backend  FastAPI mínimo (uv) que ejercita el job backend
 tests/fixture/frontend JS + tsc + node --test que ejercita el job frontend
 tests/hygiene/         prueba la lógica de pr-hygiene.yml contra repos git temporales
+tests/agents_md/       prueba los pasos de agents-md.yml con un uvx falso y revisa el contrato del workflow y del ejemplo
 tests/criterios/       proyecto uv con pytest: tests de scripts/criterios.py y del job criterios (test_ca_33_<n>_*)
 docs/                  arquitectura, desarrollo, estado, ADRs
 ```
@@ -35,6 +37,9 @@ uv run --directory tests/criterios --frozen pytest
 
 # Casos de pr-hygiene (deben fallar los que tienen que fallar)
 uv run --no-project --with pyyaml==6.0.2 python tests/hygiene/test_pr_hygiene.py
+
+# agents-md.yml: versión declarada, llamada a uvx y contrato
+uv run --no-project --with pyyaml==6.0.2 python tests/agents_md/test_agents_md.py
 
 # Fixture backend: lo mismo que corre el job backend
 cd tests/fixture/backend && uv sync --frozen && uv run --frozen ruff check . \

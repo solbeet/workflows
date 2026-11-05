@@ -20,6 +20,7 @@ Licencia: propietaria ([`LICENSE`](LICENSE), [ADR 0005](docs/decisiones/0005-lic
 | [`guardia-tests.yml`](.github/workflows/guardia-tests.yml) | Guardia de tests (fase V): frena el PR que borra, debilita o saltea tests existentes, o toca tests de aceptación, salvo dale de una persona (label) | `tests` |
 | [`rojo-verde.yml`](.github/workflows/rojo-verde.yml) | Rojo → verde (fase V): cada test nuevo de Python tiene que fallar sin el cambio y pasar con él | `rojo-verde` |
 | [`mutacion.yml`](.github/workflows/mutacion.yml) | Mutación informativa (fase V): puntaje de mutmut sobre los archivos de Python del diff y los mutantes que los tests no detectaron, en un comentario del PR; no bloquea | `mutacion` |
+| [`agents-md.yml`](.github/workflows/agents-md.yml) | Verifica que el bloque «Cómo se programa» de `AGENTS.md` sea igual a lo que genera la versión del método que declara (la lee del marcador del bloque) y que `CLAUDE.md` apunte a `AGENTS.md` sin repetir reglas. Necesita el secreto `METODO_LECTURA_TOKEN` | `verificar` (no es check requerido) |
 | [`selftest.yml`](.github/workflows/selftest.yml) | Uso interno: lintea los workflows y los ejecuta contra el fixture de `tests/fixture/` | — |
 
 ## Requisitos (repo cliente)
@@ -259,6 +260,20 @@ Qué deja: un único comentario por PR (se actualiza en cada push) que empieza c
 
 No aplica (verde, sin comentario) si el PR no cambia código de Python fuera de los tests, o si el repo ya configura mutmut en `[tool.mutmut]` (para no pisar su configuración). Hoy solo Python: Stryker (JS/TS) no está. Límite de mutmut 3.8.0: no muta funciones con decorador, así que las rutas de FastAPI (`@app.get`) no generan mutantes; se mide la lógica en funciones sin decorar.
 
+### `agents-md.yml`
+
+Corre `metodo agents-md verificar` ([solbeet-metodo#32](https://github.com/solbeet/solbeet-metodo/issues/32)): compara el bloque «Cómo se programa» de `AGENTS.md` con lo que genera el método para la versión que el propio bloque declara (`<!-- metodo:agents-md version=X.Y.Z ... -->`), y revisa que `CLAUDE.md` apunte a `AGENTS.md`. No tiene input de versión: la CLI y las reglas salen del tag `vX.Y.Z` que dice el marcador. Para subir de versión se regenera el bloque con el comando que imprime el propio check ([ADR 0011](docs/decisiones/0011-agents-md-con-token-de-lectura.md)).
+
+| Input | Tipo | Default | Obligatorio | Descripción |
+|---|---|---|---|---|
+| `runner` | string | `ubuntu-latest` | no | Runner (label de `runs-on`) del job. Ver «Elegir dónde corre». |
+
+| Secreto | Obligatorio | Descripción |
+|---|---|---|
+| `METODO_LECTURA_TOKEN` | sí, para que mida | Token de solo lectura de `solbeet/solbeet-metodo`, que es privado: el `GITHUB_TOKEN` del repo que llama no lo lee. Sin él (o en PRs de forks) el check termina en `no_medido`, código 3: nunca pasa sin comparar. |
+
+Outputs: ninguno. Permisos: `contents: read`. Resultado: `ok` (0); `diverge` o `incompleto` (1, con el diff y el comando para regenerar); `no_medido` (3, con el motivo). No es check requerido: lo decide una persona.
+
 ### `imagen.yml`
 
 | Input | Tipo | Default | Obligatorio | Descripción |
@@ -313,6 +328,7 @@ Cuando un workflow llama a otro, GitHub nombra cada check como `<job del que lla
 | `solbeet / rojo-verde` | sí, antes de prender el merge automático (con `examples/rojo-verde.yml`) |
 | `solbeet / mutacion` | **no**: es informativo hasta medirlo en 20 PRs (ADR 0009) |
 | `solbeet / criterios` | **no** por ahora: entra como informativo y cada repo lo exige cuando decida (ADR 0010) |
+| `agents-md / verificar` | **no** por ahora (con `examples/agents-md.yml`): necesita el secreto `METODO_LECTURA_TOKEN` y los forks no lo reciben |
 | `claude-review / review` | **no**: es informativo. Depende de un servicio externo y de secretos que los forks no reciben |
 
 Si el repo cliente le pone otro id (o `name:`) al job que llama, la primera parte del nombre cambia. Los nombres de los jobs de este repo (`backend`, `frontend`, `review`, `hygiene`, `secret-scan`) son parte del contrato y solo cambian en una versión mayor.

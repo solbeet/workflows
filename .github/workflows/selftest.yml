@@ -84,6 +84,9 @@ jobs:
       - name: Casos de mutación (uv y mutmut de verdad sobre el fixture)
         run: uv run --no-project --with pyyaml==6.0.2 python tests/mutacion/test_mutacion.py
 
+      - name: Casos de agents-md (versión declarada, llamada a uvx con uvx falso, token, contrato)
+        run: uv run --no-project --with pyyaml==6.0.2 python tests/agents_md/test_agents_md.py
+
       - name: Casos de criterios (matriz por criterio, suite sin tests, criterio faltante, todos presentes)
         run: uv run --directory tests/criterios --frozen pytest
 
@@ -165,3 +168,13 @@ jobs:
       pull-requests: write
     with:
       backend-dir: tests/fixture/backend
+
+  agents-md:
+    name: agents-md
+    # De punta a punta sobre el AGENTS.md de este repo, con el token de lectura del método.
+    # Solo corre si el repo define la variable AGENTS_MD_SELFTEST=true (la pone una persona
+    # después de crear el secreto METODO_LECTURA_TOKEN) y no en forks, que no reciben secretos.
+    if: github.event_name == 'pull_request' && vars.AGENTS_MD_SELFTEST == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/agents-md.yml
+    secrets:
+      METODO_LECTURA_TOKEN: ${{ secrets.METODO_LECTURA_TOKEN }}
