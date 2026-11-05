@@ -6,15 +6,21 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). V
 
 ### Agregado
 
-- `gates.yml` (fase V, ítem V22, solbeet/workflows#33): job `criterios`, informativo. Corre la suite de `criterios-dir` con JUnit, lee los criterios de la necesidad que cierra el PR y exige un `test_ca_<issue>_<n>_*` del PR que haya pasado por criterio. Rojo con `sin_tests_corridos` si la suite no corrió ningún test (aunque pytest salga 0 o 5) y con `criterios_sin_evidencia` si falta uno; neutral con `no_medido` (termina en failure) sin necesidad o sin criterios legibles. Matriz RUNTIME / CODE / SIN-EVIDENCIA en el resumen y como artefacto JSON. Input nuevo `criterios-dir`. [ADR 0010](docs/decisiones/0010-matriz-por-criterio.md).
-- `scripts/criterios.py` (fuente del paso, incrustado en `gates.yml` con `scripts/incrustar-criterios.py`) y `tests/criterios/` (pytest: un test por criterio de #33, tres fixtures del job de punta a punta), en `selftest / hygiene-logic`; `selftest / gates` corre el job sobre el propio PR.
-
 - `agents-md.yml` (solbeet/solbeet-metodo#32): job `verificar`, no requerido. Corre `metodo agents-md verificar` con la versión del método que declara el marcador del bloque «Cómo se programa» de `AGENTS.md`; falla si el bloque difiere de lo generado, si falta o si `CLAUDE.md` no apunta a `AGENTS.md`, y termina en `no_medido` si no llega el secreto nuevo `METODO_LECTURA_TOKEN` (lectura de `solbeet-metodo`, repo privado). Input `runner`. [ADR 0011](docs/decisiones/0011-agents-md-con-token-de-lectura.md).
 - `examples/agents-md.yml` y `tests/agents_md/test_agents_md.py` (10 casos con un `uvx` falso y 8 revisiones del contrato, en `selftest / hygiene-logic`); `selftest / agents-md` de punta a punta, solo si el repo define `AGENTS_MD_SELFTEST=true`.
 
+## [1.9.0] - 2026-11-04
+
+Tag `v1.9.0` sobre 850a4fc (merge de #40), creado el 2026-11-04. El tag mayor `v1` apunta a v1.9.0.
+
+### Agregado
+
+- `gates.yml` (fase V, ítem V22, solbeet/workflows#33): job `criterios`, informativo. Corre la suite de `criterios-dir` con JUnit, lee los criterios de la necesidad que cierra el PR y exige un `test_ca_<issue>_<n>_*` del PR que haya pasado por criterio. Rojo con `sin_tests_corridos` si la suite no corrió ningún test (aunque pytest salga 0 o 5) y con `criterios_sin_evidencia` si falta uno; neutral con `no_medido` (termina en failure) sin necesidad o sin criterios legibles. Matriz RUNTIME / CODE / SIN-EVIDENCIA en el resumen y como artefacto JSON. Input nuevo `criterios-dir`. [ADR 0010](docs/decisiones/0010-matriz-por-criterio.md).
+- `scripts/criterios.py` (fuente del paso, incrustado en `gates.yml` con `scripts/incrustar-criterios.py`) y `tests/criterios/` (pytest: un test por criterio de #33, tres fixtures del job de punta a punta), en `selftest / hygiene-logic`; `selftest / gates` corre el job sobre el propio PR.
+
 ### Cambia para los callers
 
-- **`gates.yml` pide `issues: read`** (job `criterios`). Un caller que solo da `contents: read` falla al arrancar. `examples/gates.yml` ya lo da; la plantilla (`verificacion.yml`) ya lo daba. ADR 0002 §4 lo clasifica como incompatible: la versión (v1.9.0 o v2.0.0) se decide al taggear (ADR 0010, «Consecuencias»).
+- **`gates.yml` pide `issues: read`** (job `criterios`). Un caller que solo da `contents: read` falla al arrancar. `examples/gates.yml` ya lo da; la plantilla (`verificacion.yml`) ya lo daba. ADR 0002 §4 lo clasifica como incompatible: se publicó como v1.9.0 porque todos los callers de la org ya daban `issues: read` (la plantilla y los de app-prueba, verificados el 2026-11-05).
 
 ## [1.8.0] - 2026-10-19
 
